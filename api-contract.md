@@ -1,6 +1,6 @@
 # 号源 QueueDepth · API 契约
 
-> 文档状态：v0.1（2026-10-17 创建；§1–§4 定稿：总体约定 + 公开查询组 + 挂号组；§5–§11 按四次会话计划推进中）
+> 文档状态：v0.1（2026-10-17 创建；§1–§5 定稿：总体约定 + 公开查询组 + 挂号组 + 支付组；§6–§11 按四次会话计划推进中）
 > 用途：作为 `appt` 模块后端 API 的业务契约，供开发、Review、测试和 AI Agent 实现时使用。
 >
 > 本文定义接口契约与业务语义，不规定具体 Java 类名、RuoYi 返回包装类型、MyBatis-Plus 调用方式、异常类等实现细节。实现时以当前 RuoYi-Vue-Plus 源码中的真实模式为准。
@@ -563,9 +563,201 @@ POST /appt/patient/patient
 
 ---
 
+## 5. 支付组（C1–C5）
+
+> 组首说明：交易链路——本项目最大亮点。渠道回调端点（C1 / C5）虽在 `/appt/public/` 前缀下（§1.1 已说明路径层与领域节解耦），语义归本组。
+> **mock 与真实渠道共用同一 `PaymentCallbackDispatcher`**（验签 → 落库 → ack → 异步入账），差异只在 `PaymentChannel` 适配器；真实渠道签约（需企业主体，PRD D7）后业务链路不改。
+
+### 5.0 交易链路时序（文字版）
+
+```text
+患者确认支付（C2 mock 按钮 / 真实渠道收银台）
+    ↓
+渠道侧产生交易，异步发送回调（C1）
+    ↓
+C1 入口：HMAC-SHA256 验签
+   失败 → 拒绝 + 落 appt_payment_callback(sign_flag=失败) + 告警，不入账
+    ↓ 通过
+落 appt_payment_callback（append-only；UNIQUE(payment_no, trade_no, notify_id) 去重）
+    ↓
+立即 ack 返回渠道          ← 真异步：渠道不因我们慢而重发
+    ↓
+异步入账（线程池）：
+   ① 查单确认：向渠道查询核对金额与状态，与回调体双事实一致才继续；
+      不一致 → 记异常 + 告警，不入账
+   ② 幂等入账：UPDATE payment SET status=PAID, trade_no, pay_time
+      WHERE payment_no=? AND status=WAIT_PAY
+      影响 0 行分流：
+        已是 PAID   = 重复回调，ack 结束
+        已是 CLOSED = 钱到了号没了 → 记异常 + 自动全额退 + 告警（见 5.1 约束）
+   ③ Registration WAIT_PAY → BOOKED
+   ④ 发「支付成功」站内信
+    ↓ 处理失败
+退避重试 3 次（1s / 5s / 15s）→ 标记 process_status=失败
+    ↓
+巡检任务主动查单兜底（见 5.3）
+```
+
+### 5.1 渠道回调（C1）
+
+```http
+POST /appt/public/payment/callback/{channel}
+```
+
+**身份：** 公开（**验签即身份**——无有效签名一律拒绝；mock 与真实同构 HMAC-SHA256 + 按渠道配置的密钥）。
+
+**路径参数：**
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| channel | 是 | `mock`（本期唯一实现）；真实渠道按适配器接入，链路不变 |
+
+**请求：**（渠道协议体，mock 与真实同构）
+
+```json
+{
+  "paymentNo": "P20261017093000123",
+  "tradeNo": "MOCK20261017093000999",
+  "notifyId": "N-8f3a2c",
+  "amount": 22.00,
+  "result": "SUCCESS",
+  "payTime": "2026-10-17 09:30:12",
+  "sign": "hmac-sha256-hex"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| paymentNo | 是 | 支付单号（幂等键之一） |
+| tradeNo | 是 | 渠道侧交易号（幂等键之一） |
+| notifyId | 是 | 回调通知 ID（幂等键之一） |
+| amount | 是 | 渠道确认金额；入账前与 `registration.fee` 快照核对，不一致 → 记异常 + 告警 |
+| result | 是 | `SUCCESS` / `FAIL` |
+| payTime | 是 | 渠道支付时间 |
+| sign | 是 | HMAC-SHA256 十六进制；验签失败 → `CALLBACK_SIGN_INVALID`：拒绝 + 落库 + 告警，**不入账** |
+
+**状态：** Payment `WAIT_PAY → PAID`；Registration `WAIT_PAY → BOOKED`。
+
+**业务行为：** 见 5.0 时序图。
+
+**约束：**
+
+- **落库去重后立即 ack**：重复 notify（同 payment_no + trade_no + notify_id）直接 ack，不进入账。
+- **竞态分支（钱到了号没了）**：入账 CAS 发现 payment 已是 `CLOSED`（关单先于回调到达）→ 记异常 + **自动全额退 + 告警**，不是返回成功就算了（红线 7；对账 R3 兜底复查）。
+- 集成测试③按本契约造数据：同一支付单回调 3 次，仅 1 次入账（PRD §12）。
+
+### 5.2 模拟支付（C2）
+
+```http
+POST /appt/patient/payment/{paymentNo}/mock-pay
+```
+
+**身份：** 登录。
+
+**请求：**
+
+```json
+{
+  "result": "SUCCESS"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| result | 是 | `SUCCESS` / `FAIL` / `TIMEOUT`，对应支付页三个手动按钮（PRD §6.6） |
+
+**业务行为：**（三分支均经 mock 渠道适配器 → dispatcher，与 C1 同一入口）
+
+```text
+SUCCESS → mock 渠道登记交易（trade_no），按 C1 协议体合成回调 → dispatcher 全链路。
+          本端点只返回「已受理」，结果由 C3 轮询呈现——保真演示真异步。
+FAIL    → 落失败回调记录（验签通过、result=FAIL）；Payment 保持 WAIT_PAY 可重试；
+          Registration 无流转（支付单状态机无「失败」态，PRD §7.3）。
+TIMEOUT → 直接调用关单服务（技术方案 §3.4 事务形状）：
+          Payment WAIT_PAY→CLOSED；Registration WAIT_PAY→CLOSED；Slot 回补。
+          演示压缩路径；真实超时由 30 秒巡检任务驱动，不经本端点。
+```
+
+**前置条件：** 支付单属于当前用户且 `status = WAIT_PAY`（否则 `PAYMENT_CLOSED`）。
+
+**约束：** 仅 `payment.channel = mock` 且 `appt.mock-pay.enabled = true` 时可用（非演示环境关闭）。
+
+**返回至少：**
+
+```text
+paymentNo
+accepted     是否已受理（SUCCESS 分支的 true 表示「已受理」，非「已支付」）
+status       支付单当前状态
+```
+
+### 5.3 支付状态查询（C3）
+
+```http
+GET /appt/patient/payment/{paymentNo}
+```
+
+**身份：** 登录。
+
+**业务行为：** 返回支付单当前状态；**可触发一次主动查单**——服务端按节流控制：同一 `payment_no` 距上次查单 ≥ 5 秒才向渠道查询（Redis 记录 last-query 时间），否则直接返回本地状态。巡检任务（30 秒一轮）对近过期单（`expire_time ∈ [now, now+2min]`）的批量主动查单属任务侧，不占本端点节流额度（技术方案 §3.4）。
+
+**返回至少：**
+
+```text
+paymentNo
+amount
+status
+expireTime    支付截止（yyyy-MM-dd HH:mm:ss）
+payTime       已支付才有
+tradeNo       已支付才有
+```
+
+### 5.4 退款单查询（C4）——P1 占位
+
+患者视角退款单列表 `GET /appt/patient/refund/list`：退款信息当前已内嵌于 B3 预约详情的 `refund` 字段；独立列表端点等真实需求出现再补条目。
+
+### 5.5 退款回调（C5）
+
+```http
+POST /appt/public/refund/callback/{channel}
+```
+
+**身份：** 公开（验签即身份，同 C1）。
+
+**请求：**
+
+```json
+{
+  "refundNo": "R20261017103000456",
+  "paymentNo": "P20261017093000123",
+  "amount": 22.00,
+  "result": "SUCCESS",
+  "refundTime": "2026-10-17 10:30:05",
+  "sign": "hmac-sha256-hex"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| refundNo | 是 | 退款单号（幂等键） |
+| paymentNo | 是 | 关联支付单 |
+| amount | 是 | 退款金额；挂号场景一律全额（PRD §6.6） |
+| result | 是 | `SUCCESS` / `FAIL` |
+| refundTime | 是 | 渠道退款时间 |
+| sign | 是 | 同 C1 验签规则 |
+
+**状态：** Refund `WAIT_REFUND → REFUNDED`；Payment `PAID → REFUNDED`；Registration `settleStatus → REFUNDED`。
+
+**业务行为：** 与 C1 同构：验签 → 落库 → ack → 异步（查单确认 → `UPDATE refund SET status=REFUNDED WHERE refund_no=? AND status=WAIT_REFUND` → 回写支付单与挂号单结算态 → 站内信）。
+
+**约束：**
+
+- 失败（`result=FAIL`）→ 退款单按退避重试（次数可配），仍失败标记失败并进后台人工队列 + 告警（PRD §6.6；对账 R5 复查）。
+- 重复回调：`refund_no` + 状态 CAS 天然幂等，第二次影响 0 行。
+
+---
+
 ## 待完成（按四次会话计划推进）
 
-- §5 支付组（会话 3）
 - §6 患者辅助组（会话 4）
 - §7 分诊组 `/appt/triage/**`（会话 4）
 - §8 管理组 `/appt/admin/**`，含 §8.1 生成器约定节（会话 4）
