@@ -100,23 +100,23 @@
 | `appt_campus` | 院区 | id, name, address, cover_url, status |
 | `appt_clinic_type` | 门诊类型 | id, code, name, status；唯一键 (code) |
 | `appt_department` | 科室三级树（全局） | id, parent_id, name, level(1/2/3), sort, status |
-| `appt_medical_staff` | 医务人员 | id, **campus_id**, dept_id, name, avatar, title(职称), degree, type(医生/护士), intro, status |
+| `appt_medical_staff` | 医务人员 | id, **campus_id**, dept_id, name, avatar, title(职称), degree, type(医生/护士), **clinic_type(门诊类型码，D-S1-7)**, intro, status |
 | `appt_staff_favorite` | 医生收藏 | id, user_id, staff_id；唯一键 (user_id, staff_id) |
 | `appt_slot_template` | 时段模板 | id, staff_id, period(上午/下午/夜间), start_time, end_time, step_minutes, clinic_type, status；唯一键 (staff_id, period, clinic_type) |
 | `appt_fee_standard` | 收费标准 | id, title(职称), clinic_type, fee, status；唯一键 (title, clinic_type) |
 | `appt_schedule` | 排班 | id, staff_id, dept_id, clinic_type, visit_date, period, status(正常/已停诊)；唯一键 (staff_id, visit_date, period) |
 | `appt_slot` | **号源** | id, schedule_id, **staff_id / dept_id / campus_id / visit_date / period（冗余，S1 D-S1-2：余量聚合与爽约扫描免 join）**, **time_point（datetime 完整时刻，D-S1-1）**, fee, status, source(正常/加号), registration_id；唯一键 **(schedule_id, time_point)** |
 | `appt_slot_ledger` | 号源台账 | id, slot_id, action(生成/占用/释放/回补/停诊/过期), before_status, after_status, registration_id, create_time |
-| `appt_patient` | 就诊人 | id, user_id, name, id_type(就诊卡/身份证), id_no(密文), **id_no_hash(HMAC-SHA256 摘要，D-S1-3)**, is_default, status；唯一键 **(id_type, id_no_hash)** |
-| `appt_registration` | 挂号单 | id, registration_no, user_id, patient_id, slot_id, staff_id, dept_id, campus_id, visit_date, period, time_point, **fee(金额快照)**, **active_flag(1=有效/NULL=终态)**, settle_status, status, sign_time, cancel_type, suspend_batch_no |
+| `appt_patient` | 就诊人 | id, user_id, name, id_type(就诊卡/身份证), id_no(密文), **id_no_hash(HMAC-SHA256 摘要，D-S1-3)**, **is_default(1=默认/NULL=非默认，D-S1-8)**, status；唯一键 **(id_type, id_no_hash)**、**(user_id, is_default)** |
+| `appt_registration` | 挂号单 | id, registration_no, user_id, patient_id, slot_id, staff_id, dept_id, campus_id, visit_date, period, time_point, **fee(金额快照)**, **active_flag(1=有效/NULL=终态，默认 1，另有 CHECK 约束)**, settle_status, status, sign_time, **sign_type(签到方式)**, cancel_type, suspend_batch_no |
 | `appt_payment` | **支付单** | id, **payment_no**, registration_id, amount, channel, status(待支付/已支付/已关闭/已退款), trade_no, expire_time, pay_time；唯一键 payment_no |
-| `appt_refund` | **退款单** | id, refund_no, payment_id, amount, status(待退款/已退款), reason；唯一键 refund_no |
+| `appt_refund` | **退款单** | id, refund_no, payment_id, registration_id, amount, status(待退款/已退款/**退款失败**), reason；唯一键 refund_no |
 | `appt_blacklist` | 黑名单 | id, **user_id(账号级)**, patient_id(关联就诊人), reason, start_time, end_time, operator, status |
 | `appt_notice` | 站内信 | id, user_id, type, title, content, read_flag |
 | `appt_job_log` | 定时任务日志 | id, job_name, batch_no, start_time, end_time, status, affected_rows, message |
 | `appt_payment_callback` | 支付回调原始记录 | id, payment_no, trade_no, notify_id, channel, raw_body, sign_flag, process_status, create_time；去重键 (payment_no, trade_no, notify_id) |
 | `appt_reconcile_result` | 对账结果 | id, batch_no, check_type, target_id, action, status, detail, create_time |
-| `appt_suspend_record` | 停诊批号 | id, batch_no, scope_type, scope_value, operator, create_time |
+| `appt_suspend_record` | 停诊批号 | id, batch_no, scope_type, scope_value, **staff_id(D-S1-5)**, **reason(停诊原因)**, **status(待处理/已处理)**, operator, create_time |
 
 **关键设计约束：**
 

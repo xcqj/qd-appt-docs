@@ -36,10 +36,10 @@
 | **D-S1-2** | `appt_slot` 冗余列 | **冗余 `staff_id`/`dept_id`/`campus_id`/`visit_date`/`period`**。技术方案 §3.2 余量聚合按 `(staff, 日期, 午别)` 分组、§3.3 爽约/过期按 `time_point` 扫描，冗余后两者都能单表命中索引，免除 join `schedule` 的 N+1。排班生成后这五个值**不再变更**（唯一变更源是停诊，走 `status`），同步风险可忽略。→ 需回写 PRD §4.2 `appt_slot` 行 |
 | **D-S1-3** | 就诊人证件号唯一性 | **增 `id_no_hash` 列（HMAC-SHA256 确定性摘要）**，唯一索引建在 `(id_type, id_no_hash)`；`id_no` 存 AES 密文（演示期明文）仅用于脱敏展示。理由：PRD §4.2 约束 6（证件号唯一）与约束 7（生产加密）在随机 IV 加密下**互斥**——密文既不能建唯一索引也不能等值查询。hash 列让两条约束同时成立。→ 需回写 PRD §4.2 约束 7 与技术方案 M11 |
 | **D-S1-4** | 业务单号规则 | **`前缀 + yyyyMMdd + 6 位当日序列`**（如 `R20261018000001`），序列用 Redis `INCR` 每日重置，`varchar(32)`。理由：可读、按日期可排序、演示与排查时肉眼可核对，符合真实医院单号习惯；雪花/UUID 都丢掉了这层信息。代价是一次 Redis 调用，挂号链路本就要访问 Redis（占位 + 余量），可忽略 |
-| **D-S1-5** | 停诊范围的结构化表达 | **`appt_suspend_record` 增 `staff_id` 列**（`SCHEDULE`/`STAFF_DATE` 必填、`CAMPUS_DATE` 可空）；`scope_type` 统一为 `SCHEDULE` / `STAFF_DATE` / `CAMPUS_DATE`（契约 §7.5 的 `DAY`/`RANGE` 一并改）。理由：E5 请求带 `staffId` 而原表无此列，只能把 staffId 拼进 `scope_value` 字符串再反解——F2 要按 staff 定位 schedule，靠字符串解析是脆的；契约 `RANGE` 要求 `scopeValue` 是 `{startDate,endDate}` 对象，塞不进 `varchar(64)`。代价：区间停诊要登记 N 条，换来「同一 `batch_no` 幂等归并」天然可用。**⏳ DDL 待落地** |
-| **D-S1-6** | 护士 / 护师的挂号费档位 | **`title` 线值增护师系列**（与既有四个医师系列并列），使 `medical_staff.type = NURSE` 的医务人员也能在 `appt_fee_standard` 上定价。理由：PRD §6.4 有「副主任护师（夜间）¥7.00」，但既有 `title` 只有 `CHIEF`/`ASSOC_CHIEF`/`ATTENDING`/`PHYSICIAN` 四个医师系列——不补则 S2 给护士生成 slot 时取不到 `fee` 档位。**⏳ 契约 §2.7 与 §2 待同步** |
-| **D-S1-7** | 医生的门诊类型归属 | **`appt_medical_staff` 增 `clinic_type varchar(32)` 列**。理由：契约 §3.4 医生主页要返回 `clinicType`，但门诊类型原本只挂在 `appt_slot_template` / `appt_schedule` 上，一个医生可有多模板多门诊类型，取哪个未定义。PRD §14.3 已定「一行 = 一个出诊身份」，staff 行本身就该带门诊类型，模板只是它的时段配置。**⏳ DDL 待落地** |
-| **D-S1-8** | 默认就诊人的唯一性 | **改造 `appt_patient.is_default`：由 `tinyint(1) NOT NULL DEFAULT 0` 改为可空、`DEFAULT NULL`，语义变为「1 = 默认 / NULL = 非默认」，并在 `(user_id, is_default)` 上建唯一索引**——沿用 M1 的「NULL 互不冲突」手法，让「一个账号最多一个默认就诊人」成为 DB 事实而非应用约定。理由：原设计只有应用层「同事务取消其它默认」，并发下两个请求可同时设成两个默认。**未采纳「新增 `default_flag` 列」方案**——那会引入第二个语义相同的列并要求手工同步两者，多一列 + 一处不一致风险；直接改造 `is_default` 是单列单真相。代价：VO 的 `isDefault` 对非默认就诊人返回 `null` 而非 `false`，前端需按 falsy 处理；批量取消默认要两步（先置 `NULL` 再置 1），不能一次 `UPDATE SET is_default=0`。**⏳ DDL 待落地** |
+| **D-S1-5** | 停诊范围的结构化表达 | **`appt_suspend_record` 增 `staff_id` 列**（`SCHEDULE`/`STAFF_DATE` 必填、`CAMPUS_DATE` 可空）；`scope_type` 统一为 `SCHEDULE` / `STAFF_DATE` / `CAMPUS_DATE`（契约 §7.5 的 `DAY`/`RANGE` 一并改）。理由：E5 请求带 `staffId` 而原表无此列，只能把 staffId 拼进 `scope_value` 字符串再反解——F2 要按 staff 定位 schedule，靠字符串解析是脆的；契约 `RANGE` 要求 `scopeValue` 是 `{startDate,endDate}` 对象，塞不进 `varchar(64)`。代价：区间停诊要登记 N 条，换来「同一 `batch_no` 幂等归并」天然可用。**✅ 已于 2026-10-18 落地（appt_schema.sql + 库内重建）** |
+| **D-S1-6** | 护士 / 护师的挂号费档位 | **`title` 线值增护师系列**（与既有四个医师系列并列），使 `medical_staff.type = NURSE` 的医务人员也能在 `appt_fee_standard` 上定价。理由：PRD §6.4 有「副主任护师（夜间）¥7.00」，但既有 `title` 只有 `CHIEF`/`ASSOC_CHIEF`/`ATTENDING`/`PHYSICIAN` 四个医师系列——不补则 S2 给护士生成 slot 时取不到 `fee` 档位。**✅ 已于 2026-10-18 同步** |
+| **D-S1-7** | 医生的门诊类型归属 | **`appt_medical_staff` 增 `clinic_type varchar(32)` 列**。理由：契约 §3.4 医生主页要返回 `clinicType`，但门诊类型原本只挂在 `appt_slot_template` / `appt_schedule` 上，一个医生可有多模板多门诊类型，取哪个未定义。PRD §14.3 已定「一行 = 一个出诊身份」，staff 行本身就该带门诊类型，模板只是它的时段配置。**✅ 已于 2026-10-18 落地（appt_schema.sql + 库内重建）** |
+| **D-S1-8** | 默认就诊人的唯一性 | **改造 `appt_patient.is_default`：由 `tinyint(1) NOT NULL DEFAULT 0` 改为可空、`DEFAULT NULL`，语义变为「1 = 默认 / NULL = 非默认」，并在 `(user_id, is_default)` 上建唯一索引**——沿用 M1 的「NULL 互不冲突」手法，让「一个账号最多一个默认就诊人」成为 DB 事实而非应用约定。理由：原设计只有应用层「同事务取消其它默认」，并发下两个请求可同时设成两个默认。**未采纳「新增 `default_flag` 列」方案**——那会引入第二个语义相同的列并要求手工同步两者，多一列 + 一处不一致风险；直接改造 `is_default` 是单列单真相。代价：VO 的 `isDefault` 对非默认就诊人返回 `null` 而非 `false`，前端需按 falsy 处理；批量取消默认要两步（先置 `NULL` 再置 1），不能一次 `UPDATE SET is_default=0`。**✅ 已于 2026-10-18 落地（appt_schema.sql + 库内重建）** |
 
 ---
 
@@ -51,7 +51,7 @@
 |---|---|---|
 | 午别 `period` | `AM` 上午 / `PM` 下午 / `NIGHT` 夜间 | 契约 §7.4 加号请求示例已用 `AM`；数量 2~3 可变，严禁写死两列（PRD §4.2-2） |
 | 门诊类型 `clinic_type`（code） | `NORMAL` 普通 / `NIGHT` 夜间延时 / `EXPERT` 知名专家 | 契约 §3.4 用中文名展示，此处的 code 为存储与筛选值 |
-| 职称 `title` | `CHIEF` 主任医师 / `ASSOC_CHIEF` 副主任医师 / `ATTENDING` 主治医师 / `PHYSICIAN` 医师 | 与 `appt_fee_standard` 定价键联动；副主任医师 ¥15.00（PRD §14.2-12） |
+| 职称 `title` | `CHIEF` 主任医师 / `ASSOC_CHIEF` 副主任医师 / `ATTENDING` 主治医师 / `PHYSICIAN` 医师 / `ASSOC_CHIEF_NURSE` 副主任护师（D-S1-6） | 与 `appt_fee_standard` 定价键联动；副主任医师 ¥15.00（PRD §14.2-12）；副主任护师 ¥7.00（PRD §6.4）。护理职称本期只用到这一档，其余按同一命名规则扩展 |
 | 号源来源 `source` | `NORMAL` 正常 / `EXTRA` 加号 | 加号登记见契约 §7.4 |
 | 证件类型 `id_type` | `IDCARD` 身份证 / `CARD` 就诊卡 | 身份证全局唯一、就诊卡院内唯一（PRD §4.2-6） |
 | 号源台账 `action` | `GENERATE` 生成 / `OCCUPY` 占用 / `RELEASE` 释放 / `REFILL` 回补 / `SUSPEND` 停诊 / `EXPIRE` 过期 | 台账倒查（技术方案 §3.6） |
@@ -125,6 +125,7 @@
 | title | varchar(32) | NOT NULL | 职称线值（§2） |
 | degree | varchar(64) | | 学位（展示用，契约 §3.3） |
 | type | varchar(16) | NOT NULL | `DOCTOR` 医生 / `NURSE` 护士 |
+| **clinic_type** | varchar(32) | NOT NULL | **门诊类型 code**（D-S1-7；契约 §3.4 医生主页需返回 `clinicType`）。与 `slot_template.clinic_type` / `schedule.clinic_type` 的一致性约定见 §6 |
 | intro | varchar(2000) | | 简介 |
 | sort | int | | |
 | status | char(1) | NOT NULL | |
@@ -249,10 +250,11 @@
 | period | varchar(16) | NOT NULL | |
 | time_point | datetime | NOT NULL | 与 slot 一致（D-S1-1） |
 | fee | decimal(10,2) | NOT NULL | **金额快照**（I2） |
-| **active_flag** | tinyint(1) | | **1 = 有效 / NULL = 终态**（M1；MySQL 唯一索引中 NULL 互不冲突，号源回池复用天然成立） |
+| **active_flag** | tinyint(1) | | **1 = 有效 / NULL = 终态**（M1；MySQL 唯一索引中 NULL 互不冲突，号源回池复用天然成立）。**默认 1**——漏写时朝「仍然设防」而非「静默失效」的方向偏。组合合法性由 `chk_reg_active` 兜底（见表下） |
 | settle_status | varchar(16) | NOT NULL | `NONE`/`WAIT_REFUND`/`REFUNDED`（契约 §2.7） |
 | status | varchar(16) | NOT NULL | 契约 §2.7 八态 |
 | sign_time | datetime | | 签到时间 |
+| **sign_type** | varchar(16) | | **签到方式**：`SCAN` 扫码 / `MANUAL` 手动补签（契约 §7.1 E1 / §7.2 E2）；仅 `SIGNED` 态有值 |
 | cancel_type | varchar(16) | | `ACTIVE`/`PASSIVE` |
 | suspend_batch_no | varchar(32) | | 停诊批号回写，批量流转幂等（I7） |
 
@@ -264,7 +266,10 @@
 - `(user_id, status)`——「同时持有 ≤3」计数 + 黑名单统计（M3/M13）
 - `(status, time_point)`——爽约扫描（技术方案 §3.3）
 
-> 三条联合唯一索引的列**一律 `NOT NULL`**（`active_flag` 除外，它靠 NULL 生效）。`cancel_type`/`sign_time`/`suspend_batch_no` 可空，不参与唯一键。
+> 三条联合唯一索引的列**一律 `NOT NULL`**（`active_flag` 除外，它靠 NULL 生效）。`cancel_type`/`sign_time`/`sign_type`/`suspend_batch_no` 可空，不参与唯一键。
+>
+> **`CHECK chk_reg_active`（P0，必须有）**：`status ∈ {WAIT_PAY, BOOKED, SIGNED}` ⇔ `active_flag = 1`；`status ∈ {COMPLETED, CLOSED, CANCELED_ACTIVE, CANCELED_PASSIVE, NOSHOW}` ⇔ `active_flag IS NULL`。
+> **为什么必须有**：三条唯一索引**只认 `active_flag`、不认 `status`**，DB 侧若无此约束则零校验——① 终态迁移漏置 `NULL` → 终态单永久占住 `active_flag=1`，号源**无法回池复用**（I1 的反向击穿，不是超卖而是号源废掉），且该就诊人同科室同日永久挂不上；② 插入漏置 `1` → 三条限购唯一索引同时静默失效。加了它，任何绕过 `*StateService` 的 UPDATE 都会报 3819 而不是留下脏数据。
 
 #### `appt_payment` 支付单
 
@@ -309,10 +314,10 @@
 | id_type | varchar(16) | NOT NULL | `IDCARD`/`CARD` |
 | id_no | varchar(255) | NOT NULL | **密文列**：生产 AES 加密，演示期明文（M11）；**日志禁止打印** |
 | **id_no_hash** | varchar(64) | NOT NULL | **HMAC-SHA256 确定性摘要**（D-S1-3）；唯一性与等值查询走此列 |
-| is_default | tinyint(1) | NOT NULL | 1 默认 / 0 否；每人 ≤10 个就诊人（PRD §14.2-9） |
+| **is_default** | tinyint(1) | | **1 = 默认 / NULL = 非默认**（D-S1-8；每人 ≤10 个就诊人，PRD §14.2-9）。**非默认一律存 `NULL`，不可存 `0`**——`UNIQUE(user_id, is_default)` 中 0 与 0 会互相冲突，只有 NULL 互不冲突 |
 | status | char(1) | NOT NULL | |
 
-索引：**`UNIQUE(id_type, id_no_hash)`**（D-S1-3）、`(user_id, status)`。
+索引：**`UNIQUE(id_type, id_no_hash)`**（D-S1-3）、**`UNIQUE(user_id, is_default)`**（D-S1-8：一个账号至多一个默认就诊人）、`(user_id, status)`。
 
 > 接口位预留：`IdNoEncryptor`（加解密 + 脱敏）在 `appt/account` 包留空实现，生产替换为 AES/GM；**查询路径一律经 hash**，密文列只用于展示脱敏。
 
@@ -398,11 +403,14 @@
 |---|---|---|---|
 | id | bigint | PK | |
 | batch_no | varchar(32) | NOT NULL | 幂等锚点（I7） |
-| scope_type | varchar(16) | NOT NULL | `SCHEDULE` 单排班 / `STAFF_DATE` 某医生某日 / `CAMPUS_DATE` 院区某日 |
-| scope_value | varchar(64) | NOT NULL | 范围值（id 或 `campusId:date`） |
+| scope_type | varchar(16) | NOT NULL | `SCHEDULE` 单排班 / `STAFF_DATE` 某医生某日 / `CAMPUS_DATE` 院区某日（D-S1-5） |
+| scope_value | varchar(64) | NOT NULL | `SCHEDULE` 存 scheduleId；`STAFF_DATE` 存 visitDate；`CAMPUS_DATE` 存 `campusId:date`（D-S1-5） |
+| **staff_id** | bigint | | **医务人员 id**（D-S1-5；`SCHEDULE`/`STAFF_DATE` 必填，`CAMPUS_DATE` 为空）——F2 处理时要按 staff 定位 schedule，不能靠解析 `scope_value` 字符串 |
+| **reason** | varchar(255) | | **停诊原因**（契约 §7.5 E5；用于向受影响患者发站内信） |
+| **status** | varchar(16) | NOT NULL | **`PENDING` 待处理 / `HANDLED` 已处理**（契约 §8.4 停诊登记列表按此筛选；同一范围已存在 `PENDING` 时返回已登记批号，不重复建单） |
 | operator | varchar(64) | | |
 
-索引：`UNIQUE(batch_no)`、`(scope_type, scope_value)`。
+索引：`UNIQUE(batch_no)`、`(scope_type, scope_value)`、**`(status, create_time)`**（§8.4 列表按状态筛选，D-S1-5 新增）。
 
 ---
 
@@ -428,16 +436,18 @@
 | registration | `UNIQUE(patient_id, time_point, active_flag)` | I4 同时间点限 1 |
 | registration | `(user_id, status)` | 「同时持有 ≤3」+ 黑名单统计（M3/M13） |
 | registration | `(status, time_point)` | 爽约扫描（§3.3） |
+| **registration** | **`CHECK chk_reg_active`** | **状态 × `active_flag` 组合合法性（I1/I4 的 DB 侧兜底，见 §3.3 表下）** |
 | payment | `UNIQUE(payment_no)` / `(status, expire_time)` / `(registration_id)` | I5；关单巡检（§3.4） |
-| refund | `UNIQUE(refund_no)` / `(status, create_time)` | I5；退款重试扫描 |
+| refund | `UNIQUE(refund_no)` / `(status, create_time)` / **`(registration_id)`** | I5；退款重试扫描；**`(registration_id)` 供对账 R3 判「无退款单」，缺则全表扫** |
 | **patient** | **`UNIQUE(id_type, id_no_hash)`** | **证件唯一 + 加密共存（D-S1-3）** |
+| **patient** | **`UNIQUE(user_id, is_default)`** | **一账号至多一个默认就诊人（D-S1-8）** |
 | patient | `(user_id, status)` | 就诊人列表（契约 §4.6） |
 | blacklist | `(user_id, status)` / `(end_time)` | 限购拦截；到期解冻 |
 | notice | `(user_id, read_flag, create_time)` | 站内信列表 |
 | job_log | `UNIQUE(batch_no)` / `(job_name, start_time)` | I8 不重跑、漏跑可补 |
 | payment_callback | `UNIQUE(payment_no, trade_no, notify_id)` | 回调去重（§3.5） |
 | reconcile_result | `(batch_no)` / `(check_type, status, create_time)` | 对账结果查询 |
-| suspend_record | `UNIQUE(batch_no)` / `(scope_type, scope_value)` | I7 停诊幂等 |
+| suspend_record | `UNIQUE(batch_no)` / `(scope_type, scope_value)` / **`(status, create_time)`** | I7 停诊幂等；**`(status, create_time)` 供 §8.4 登记列表按待处理筛选** |
 
 ---
 
@@ -469,6 +479,8 @@
 | 停诊时已签到挂号单 | 本期不参与批量退号（PRD §14.3） |
 | 索引体积 | `varchar` 状态列比 `tinyint` 每索引项多约 15 字节；演示量级（万级）无影响，生产量级需复核（§1-5 的取舍） |
 | **`appt_slot` 冗余列的同步边界** | D-S1-2 说「排班生成后五个冗余值不再变更」，那只覆盖了单次业务操作；**后台修改 `appt_medical_staff.campus_id` / `dept_id`（医生换科室、换院区）时不追溯**已生成的 `appt_slot` 与 `appt_registration` 冗余列——与 `fee` 快照同一原则（保护历史单可倒查）。因此可能出现「该医生已调至 B 院区，但历史号源仍挂在 A」的查询结果，**属预期不是 bug**；S1 生成代码时不得当作数据不一致去修 |
+| **`medical_staff.clinic_type` 与 `slot_template.clinic_type` 的冗余** | D-S1-7 给 staff 加了 `clinic_type`，与 `slot_template.clinic_type` / `schedule.clinic_type` 构成一对新冗余。`UNIQUE(staff_id, period, clinic_type)` 允许同一 staff 有多个不同 `clinic_type` 的模板，与「一行 = 一个出诊身份」（PRD §14.3）相冲突。**约定：同一 staff 的所有 `slot_template.clinic_type` 必须等于 `staff.clinic_type`**，`appt_schedule.clinic_type` 同理从 staff 取值；由 Service 层校验（跨表无法用 CHECK）。不遵守则医生主页的 `clinicType` 与排班实际不符 |
+| **`appt_patient.is_default` 的 NULL 语义** | 非默认必须存 `NULL`，**不可存 `0`**——`UNIQUE(user_id, is_default)` 中 0 与 0 会互相冲突，只有 NULL 才互不冲突。代价：VO 的 `isDefault` 对非默认就诊人返回 `null` 而非 `false`，前端按 falsy 处理；批量取消默认要两步（先置 `NULL` 再置 1），不能一次 `UPDATE SET is_default=0` |
 | **`medical_staff` 删除的引用校验范围** | 上一条「基础数据物理删除」的校验清单只覆盖 `appt_schedule` / `appt_slot` / `appt_registration`。删除 `appt_medical_staff` 前还须额外校验 `appt_staff_favorite.staff_id` 与 `appt_slot_template.staff_id`，否则留下孤儿收藏与孤儿模板 |
 
 ---

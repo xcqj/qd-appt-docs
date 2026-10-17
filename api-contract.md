@@ -123,7 +123,7 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 |---|---|
 | 午别 `period` | `AM` 上午 / `PM` 下午 / `NIGHT` 夜间（数量 2~3 可变，严禁写死两列，PRD §4.2-2） |
 | 门诊类型 `clinicType` | `NORMAL` 普通 / `NIGHT` 夜间延时 / `EXPERT` 知名专家（展示用中文名，见 §3.4） |
-| 职称 `title` | `CHIEF` 主任医师 / `ASSOC_CHIEF` 副主任医师 / `ATTENDING` 主治医师 / `PHYSICIAN` 医师 |
+| 职称 `title` | `CHIEF` 主任医师 / `ASSOC_CHIEF` 副主任医师 / `ATTENDING` 主治医师 / `PHYSICIAN` 医师 / `ASSOC_CHIEF_NURSE` 副主任护师（D-S1-6；PRD §6.4「副主任护师（夜间）¥7.00」需护理职称也能在 `fee_standard` 定价；本期只用这一档护理职称） |
 | 号源来源 `source` | `NORMAL` 正常 / `EXTRA` 加号 |
 | 证件类型 `idType` | `IDCARD` 身份证 / `CARD` 就诊卡 |
 | 号源台账 `action` | `GENERATE` / `OCCUPY` / `RELEASE` / `REFILL` / `SUSPEND` / `EXPIRE` |
