@@ -129,7 +129,8 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 | 号源台账 `action` | `GENERATE` / `OCCUPY` / `RELEASE` / `REFILL` / `SUSPEND` / `EXPIRE` |
 | 取消类型 `cancelType` | `ACTIVE` 主动 / `PASSIVE` 被动 |
 | 排班状态 `schedule.status` | `NORMAL` 正常 / `SUSPENDED` 已停诊 |
-| 定时任务 `job.status` | `RUNNING` 执行中 / `SUCCESS` 成功 / `FAIL` 失败 |
+| 定时任务 `job.status` | `RUNNING` 执行中 / `SUCCESS` 成功 / `FAIL` 失败 / `SKIPPED` 未抢到锁或本轮任务未结束，**跳过本轮**（红线 13） |
+| 退款单 `refund.status` | `WAIT_REFUND` 待退款 / `REFUNDED` 已退款 / `FAILED` 退款失败（退避重试耗尽后置此态，进人工队列 + 告警，PRD §6.6；对账 R5 复查） |
 | 支付回调 `callback.processStatus` | `PENDING` 待处理 / `SUCCESS` 已入账 / `IGNORED` 重复丢弃 / `FAILED` 处理失败 |
 | 对账结果 `reconcile.status` | `OK` 正常 / `FIXED` 已自动修复 / `ALERT` 待人工 |
 
@@ -766,13 +767,13 @@ POST /appt/public/refund/callback/{channel}
 | refundTime | 是 | 渠道退款时间 |
 | sign | 是 | 同 C1 验签规则 |
 
-**状态：** Refund `WAIT_REFUND → REFUNDED`；Payment `PAID → REFUNDED`；Registration `settleStatus → REFUNDED`。
+**状态：** Refund `WAIT_REFUND → REFUNDED`（退款回调 `result=SUCCESS`）或 `WAIT_REFUND → FAILED`（退避重试耗尽）；Payment `PAID → REFUNDED`；Registration `settleStatus → REFUNDED`（仅成功分支，失败态不回写结算态）。
 
 **业务行为：** 与 C1 同构：验签 → 落库 → ack → 异步（查单确认 → `UPDATE refund SET status=REFUNDED WHERE refund_no=? AND status=WAIT_REFUND` → 回写支付单与挂号单结算态 → 站内信）。
 
 **约束：**
 
-- 失败（`result=FAIL`）→ 退款单按退避重试（次数可配），仍失败标记失败并进后台人工队列 + 告警（PRD §6.6；对账 R5 复查）。
+- 失败（`result=FAIL`）→ 退款单按退避重试（次数可配），仍失败则 Refund 置 `FAILED` 并进后台人工队列 + 告警（PRD §6.6；对账 R5 复查）。`FAILED` 为**终态**：如确需再退，由人工触发另建退款单（`refund_no` 重新取号），不在原单上回滚复用——保证退款幂等链可追溯。
 - 重复回调：`refund_no` + 状态 CAS 天然幂等，第二次影响 0 行。
 
 ---
@@ -1026,13 +1027,14 @@ POST /appt/admin/suspend/handle
 | Payment `WAIT_PAY→PAID` | C1 回调 | 巡检主动查单 | — |
 | Payment `WAIT_PAY→CLOSED` | B4 / C2 TIMEOUT | 关单巡检 | — |
 | Payment `PAID→REFUNDED` | C5 退款回调 | — | R3 应退未退 |
-| Refund `WAIT_REFUND→REFUNDED` | C5 退款回调 | — | R3 / R5 |
+| Refund `WAIT_REFUND→REFUNDED` | C5 退款回调（`result=SUCCESS`） | — | R3 / R5 |
+| Refund `WAIT_REFUND→FAILED` | 退款重试耗尽（退避次数用尽） | — | R5 重试 → 仍失败进人工队列 |
 
 ### 9.2 无端点的状态流转与可观测面
 
 放号（每日 08:00）/ 关单巡检（30s）/ 爽约与过期扫描（5min）/ 置完成（23:30）/ 日终对账（03:00）没有入站 API；契约只覆盖其可观测端点：
 
-- `GET /appt/admin/job-log/list`（任务日志：批号 / 起止 / 影响行数 / 结果 / skipped 标记）
+- `GET /appt/admin/job-log/list`（任务日志：批号 / 起止 / 影响行数 / 结果 / `job.status` 含 `SKIPPED`）
 - `POST /appt/admin/job-log/{id}/rerun`（P1：手动重跑）
 - `GET /appt/admin/reconcile/results`（P1：对账结果列表）
 

@@ -57,7 +57,8 @@
 | 号源台账 `action` | `GENERATE` 生成 / `OCCUPY` 占用 / `RELEASE` 释放 / `REFILL` 回补 / `SUSPEND` 停诊 / `EXPIRE` 过期 | 台账倒查（技术方案 §3.6） |
 | 取消类型 `cancel_type` | `ACTIVE` 主动 / `PASSIVE` 被动 | 与 status 的 `CANCELED_ACTIVE`/`CANCELED_PASSIVE` 同源，保留供后台按取消渠道统计 |
 | 排班状态 `schedule.status` | `NORMAL` 正常 / `SUSPENDED` 已停诊 | 停诊上报见契约 §7.5 |
-| 任务日志 `status` | `RUNNING` / `SUCCESS` / `FAIL` | 后台「定时任务日志」菜单 |
+| 任务日志 `status` | `RUNNING` / `SUCCESS` / `FAIL` / `SKIPPED` 跳过本轮 | 后台「定时任务日志」菜单；`SKIPPED` 承载红线 13「拿不到锁跳过本轮并记日志」 |
+| 退款单 `status` | `WAIT_REFUND` / `REFUNDED` / `FAILED` | 退避重试耗尽置 `FAILED`，终态；如需再退另建退款单，不在原单回滚 |
 | 回调处理 `process_status` | `PENDING` / `SUCCESS` / `IGNORED` 重复丢弃 / `FAILED` | 回调去重与重放（技术方案 §3.5） |
 | 对账 `status` | `OK` 正常 / `FIXED` 已自动修复 / `ALERT` 待人工 | 后台「运维对账」菜单（技术方案 §3.6） |
 | 退号/退款原因 `reason` | 自由文本 | 不做枚举，避免枚举膨胀 |
@@ -290,11 +291,11 @@
 | payment_id | bigint | NOT NULL | |
 | registration_id | bigint | NOT NULL | |
 | amount | decimal(10,2) | NOT NULL | |
-| status | varchar(16) | NOT NULL | `WAIT_REFUND` / `REFUNDED` |
+| status | varchar(16) | NOT NULL | `WAIT_REFUND` / `REFUNDED` / `FAILED`（退避重试耗尽；对账 R5 复查） |
 | reason | varchar(255) | | |
 | refund_time | datetime | | |
 
-索引：**`UNIQUE(refund_no)`**（I5）、`(status, create_time)`（退款重试扫描）。
+索引：**`UNIQUE(refund_no)`**（I5）、`(status, create_time)`（退款重试扫描；`FAILED` 态同样被此索引覆盖）。
 
 ### 3.4 账号与运营域
 
@@ -354,7 +355,7 @@
 | batch_no | varchar(32) | NOT NULL | 批号（I8） |
 | start_time | datetime | NOT NULL | |
 | end_time | datetime | | |
-| status | varchar(16) | NOT NULL | `RUNNING`/`SUCCESS`/`FAIL` |
+| status | varchar(16) | NOT NULL | `RUNNING`/`SUCCESS`/`FAIL`/`SKIPPED` |
 | affected_rows | int | | |
 | message | varchar(2000) | | |
 
@@ -478,4 +479,4 @@
 2. **PRD §4.2 `appt_slot` 行**：补冗余列 `staff_id`/`dept_id`/`campus_id`/`visit_date`/`period`（D-S1-2）。
 3. **PRD §4.2 约束 7 与技术方案 M11**：补 `id_no_hash` 列与「唯一性走 hash、密文只用于展示」（D-S1-3）。
 
-另外 **API 契约 §2.7** 需补 §2 的基础数据枚举线值表（period / clinic_type / title / source / id_type / action / schedule.status / job status / callback status / reconcile status）。
+另外 **API 契约 §2.7** 需补 §2 的基础数据枚举线值表（period / clinic_type / title / source / id_type / action / schedule.status / job status / callback status / reconcile status）——**已于 2026-10-18 完成**；本轮另随退款失败链路增补 `refund.status` 一项。
