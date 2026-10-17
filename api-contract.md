@@ -1,6 +1,6 @@
 # 号源 QueueDepth · API 契约
 
-> 文档状态：v0.1（2026-10-17 创建；§1–§5 定稿：总体约定 + 公开查询组 + 挂号组 + 支付组；§6–§11 按四次会话计划推进中）
+> 文档状态：v0.1（2026-10-17 定稿）：四层契约全量；P1 端点条目（B8–B10 / C4 / D1–D6 / E3 / F3–F4 / F8–F30）待对应切片联调前补，占位见 §10
 > 用途：作为 `appt` 模块后端 API 的业务契约，供开发、Review、测试和 AI Agent 实现时使用。
 >
 > 本文定义接口契约与业务语义，不规定具体 Java 类名、RuoYi 返回包装类型、MyBatis-Plus 调用方式、异常类等实现细节。实现时以当前 RuoYi-Vue-Plus 源码中的真实模式为准。
@@ -756,11 +756,328 @@ POST /appt/public/refund/callback/{channel}
 
 ---
 
-## 待完成（按四次会话计划推进）
+## 6. 患者辅助组 `/appt/patient/**`（D1–D6）——v0.1 简条
 
-- §6 患者辅助组（会话 4）
-- §7 分诊组 `/appt/triage/**`（会话 4）
-- §8 管理组 `/appt/admin/**`，含 §8.1 生成器约定节（会话 4）
-- §9 API 与业务状态的边界（会话 4）
-- §10 P0 API 一览表（会话 4）
-- §11 待实现层确定事项（会话 4）
+| 端点 | 身份 | 说明 |
+|---|---|---|
+| GET `/appt/patient/favorite/list` | 登录 | 我的医生（收藏列表），返回 staffId + 基本信息 + 收藏时间 |
+| POST `/appt/patient/favorite/{staffId}` | 登录 | 收藏；重复收藏幂等（`UNIQUE(user_id, staff_id)`） |
+| DELETE `/appt/patient/favorite/{staffId}` | 登录 | 取消收藏 |
+| GET `/appt/patient/notice/list` | 登录 | 消息列表，分页，按时间倒序 |
+| GET `/appt/patient/notice/unread-count` | 登录 | 未读数（tab 红点） |
+| PUT `/appt/patient/notice/{id}/read` | 登录 | 标记已读；仅本人消息 |
+
+> 通知场景七种（PRD §6.12）：挂号成功（待支付）/ 支付成功 / 超时关单 / 退号成功 / 停诊取消 / 爽约记录 / 黑名单生效。`notice.type` 线值在 S6 补条目时定义。字段级条目在 S5 / S6 前端联调前补。
+
+---
+
+## 7. 分诊组 `/appt/triage/**`（E1–E5）
+
+> 组首说明：登录 + `triage` 角色（`@SaCheckRole`）。数据范围 = 账号在岗院区（本期简化，PRD §14.3）；**请求不带 campusId，服务端从账号解析**（红线 10）。
+
+### 7.1 扫码签到（E1）
+
+```http
+POST /appt/triage/sign
+```
+
+**身份：** triage。
+
+**请求：**
+
+```json
+{
+  "registrationNo": "G20261017093000123"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| registrationNo | 是 | 二维码内容 = `registration_no`（PRD §6.8） |
+
+**状态：** Registration `BOOKED → SIGNED`（`sign_type = 扫码`）。
+
+**前置条件：**
+
+- `now ≥ 就诊日 00:00`（否则 `SIGN_TOO_EARLY`，PRD §6.8）
+- `now < time_point + 30min` 且 `status = BOOKED`（否则 `SIGN_WINDOW_CLOSED`）
+
+**业务行为：** `UPDATE registration SET status=SIGNED, sign_time=now WHERE registration_no=? AND status=BOOKED`；影响 0 行 → `SIGN_WINDOW_CLOSED`（与爽约扫描竞争同一 CAS，**先到先得**，技术方案 §3.3）。
+
+**返回至少：**
+
+```text
+registrationId / registrationNo
+patientName / staffName
+visitDate / period / timePoint
+signTime
+```
+
+### 7.2 手动补签（E2）
+
+```http
+POST /appt/triage/sign/manual
+```
+
+**身份：** triage。
+
+**请求：** 同 E1（`{ registrationNo }` 或 `{ registrationId }`）。
+
+**状态：** 同 E1（`BOOKED → SIGNED`，`sign_type = 手动`）。
+
+**约束：**
+
+- 前置条件同 E1：仅当日、未过爽约判定点。**已判 `NOSHOW` 的单不可补签**——爽约判定权威，扫描先到先得；补签只覆盖「患者已到院但扫码失败」。
+- 与 E1 共用同一状态边与 CAS，仅 `sign_type` 区分，便于后台签到记录统计。
+
+### 7.3 当日签到列表（E3）——P1 占位
+
+`GET /appt/triage/sign/list?date=`：本人在岗院区当日挂号单（含签到态与签到方式）。字段条目在 S6 分诊端联调前补。
+
+### 7.4 加号登记（E4）
+
+```http
+POST /appt/triage/extra-slot
+```
+
+**身份：** triage。
+
+**请求：**
+
+```json
+{
+  "scheduleId": 5001,
+  "period": "AM"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| scheduleId | 是 | 目标排班 |
+| period | 否 | 午别；缺省取该排班当前会话中的午别（与模板一致） |
+
+**状态：** 新建 Slot（`source = 加号`，`status = AVAILABLE`）。
+
+**前置条件：** 排班存在且未停诊（否则 `EXTRA_SLOT_INVALID`）；该午别号源已满（满才加号，PRD §6.11）。
+
+**业务行为：** 取该午别 `MAX(time_point)` + 模板步长 → INSERT slot（`UNIQUE(schedule_id, time_point)` 防重；并发加号撞键 → 重算重试）。
+
+**返回至少：** `slotId / scheduleId / timePoint / fee / source`。
+
+**约束：** 加号 Slot 与普通 Slot 走同一预约三道防线（§4.1），无第二套逻辑。
+
+### 7.5 停诊上报（E5）
+
+```http
+POST /appt/triage/suspend
+```
+
+**身份：** triage。
+
+**请求：**
+
+```json
+{
+  "staffId": 301,
+  "scopeType": "DAY",
+  "scopeValue": "2026-10-22",
+  "reason": "医生临时会议"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| staffId | 是 | 停诊对象医务人员 |
+| scopeType | 是 | `SCHEDULE` 单个午别 / `DAY` 整天 / `RANGE` 日期区间 |
+| scopeValue | 是 | SCHEDULE → scheduleId；DAY → visitDate；RANGE → `{ startDate, endDate }` |
+| reason | 是 | 停诊原因（进站内信通知患者） |
+
+**业务行为：** INSERT `appt_suspend_record`（`batch_no` 预生成，`operator = 当前账号`，`status = 待处理`）→ 返回批号。**本端点只登记、不执行退号**——执行是管理端 F2 的职责（两段式）。
+
+**约束：** 同一范围存在未处理的登记时返回已登记批号，不重复建单。
+
+---
+
+## 8. 管理组 `/appt/admin/**`（F1–F30）
+
+### 8.1 管理端通用约定 + RuoYi 生成器约定（P0）
+
+- 路径模板：`/appt/admin/{entity}/...`；权限命名空间 `appt:{entity}:{list|query|add|edit|remove}`（`@SaCheckPermission`）。
+- 基础数据六实体（院区 `campus` / 门诊类型 `clinicType` / 科室 `dept` / 医务人员 `staff` / 收费标准 `feeStandard` / 时段模板 `slotTemplate`）的标准 CRUD 由 RuoYi 代码生成器产出，**契约不逐个写字段**（字段级归 `database-design.md` 与生成器表单配置）。
+- 以下七项特有约束生成器不会产生，必须遵守：
+
+| # | 约束 |
+|---|---|
+| 1 | **科室树**：树形端点（嵌套 `children`），非标准分页 CRUD；增改父节点时防成环 |
+| 2 | **医务人员**：一行 = 一个出诊身份（`campus_id` 单值）；跨院区出诊为已知边界（PRD §14.3） |
+| 3 | **收费标准**：`UNIQUE(title, clinic_type)`；增改撞键返回明确错误，不静默覆盖 |
+| 4 | **编辑不追溯**：时段模板与收费标准的增改不影响已生成 Slot 的 `fee` 与 `time_point`（金额快照原则，PRD §4.2-5） |
+| 5 | **删除引用约束**：院区下有医务人员 / 科室有下级或关联人员 / 模板已生成排班 → 拒绝删除并提示 |
+| 6 | **路径命名与 public 层对齐**：public 用 `dept / staff / slot`，管理端生成器默认产出 `department / medicalStaff` 等——契约统一前者，前后端一套心智 |
+| 7 | **号源删除约束**：无有效挂号的 Slot 允许单删；有有效挂号 → 拒绝，走停诊流程（PRD §6.2） |
+
+### 8.2 排班生成（F1）
+
+```http
+POST /appt/admin/schedule/generate
+```
+
+**身份：** `appt:schedule:add`。
+
+**请求：**
+
+```json
+{
+  "staffId": 301,
+  "startDate": "2026-10-24",
+  "endDate": "2026-10-30"
+}
+```
+
+**业务行为：** 按该人员的 `SlotTemplate`（午别 × 起止 × 步长 × 门诊类型）为范围内每个有模板的日期批量生成 Schedule + Slot（直接 `AVAILABLE`）；`UNIQUE(staff_id, visit_date, period)` + 批号保证重跑不重复生成。放号策略 `rolling` 下新生成Slot 直接可约；`immediate` 模式同效果（PRD §6.1）。
+
+**预览：** `GET /appt/admin/schedule/preview?staffId=&startDate=&endDate=` —— 将生成的排班与号数预览，不落库。
+
+**返回至少：** `batchNo / scheduleCount / slotCount`。
+
+### 8.3 停诊处理（F2）
+
+```http
+POST /appt/admin/suspend/handle
+```
+
+**身份：** `appt:suspend:handle`。
+
+**请求：**
+
+```json
+{
+  "suspendId": 12
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| suspendId | 是 | E5 停诊上报的登记 ID（两段式：凭批号处理，批号即幂等锚点） |
+
+**状态：** Schedule `正常 → 已停诊`；范围内 `WAIT_PAY / BOOKED` 的 Registration → `CANCELED_PASSIVE`（`cancel_type = 停诊`，**不计爽约**）；未预约 Slot → `SUSPENDED`；已支付 → 批量新建 Refund（`WAIT_REFUND`）。
+
+**业务行为：** 分批事务（≤100/批，红线 12）+ 批号 CAS 守卫；**重复执行第二次全部影响 0 行**（不重复退号 / 退款 / 通知，PRD §6.10）；全部受影响患者发站内信；退款走 §5.5 异步链路。
+
+**约束：** **已签到的单不参与批量退号**（患者已在院，现场人工协调；本期简化边界，PRD §6.10 / §14.3）。
+
+### 8.4 排班与号源查看（F5 / F6 / F7）
+
+| 端点 | 身份 | 说明 |
+|---|---|---|
+| GET `/appt/admin/schedule/list` | `appt:schedule:list` | 排班列表，分页；筛选 staffId / date / period / status |
+| GET `/appt/admin/suspend/list` | `appt:suspend:list` | 停诊登记记录，分页；status = 待处理 / 已处理 |
+| GET `/appt/admin/slot/list` | `appt:slot:list` | 号源查看，分页；筛选 scheduleId / status / source；含 registration_id 关联 |
+| DELETE `/appt/admin/slot/{id}` | `appt:slot:remove` | P1：仅无有效挂号的 Slot 可删（§8.1 约束 7） |
+
+### 8.5 其余管理端点——P1 占位
+
+- **F3 对账触发** `POST /appt/admin/reconcile/run`：`appt:reconcile:run`；同步执行、60 秒预算，返回 R1–R7 各查异常数摘要；明细走 F22 结果列表。若实测超时改异步，契约预留说明。
+- **F4 数据看板** `GET /appt/admin/dashboard`：`appt:dashboard:query`；今日放号 / 已预约 / 已签到 / 爽约率 / 退号率 / 支付成功率 / 科室 TOP5（PRD §10.2）。
+- **F8–F24**（挂号单列表详情 / 手动退号 / 签到记录 / 加号记录 / 支付单 / 退款单 / 渠道配置 / 黑名单 / 限购规则 / 就诊人 / 对账结果 / 任务日志）：S5–S7 联调前补条目；手动退号复用 B5 服务端逻辑。
+- **F25–F30** 六实体基础数据 CRUD：走 §8.1 生成器约定。
+
+---
+
+## 9. API 与业务状态的边界
+
+### 9.1 四张状态机 × 触发源矩阵
+
+| 状态边 | API 端点 | 定时任务 | 对账修复 |
+|---|---|---|---|
+| Slot `AVAILABLE→TAKEN` | B1 提交挂号 | — | R2 号源未占用 |
+| Slot `TAKEN→AVAILABLE` | B4 取消 / B5 退号 | 关单巡检（30s） | R1 幽灵占号 |
+| Slot `AVAILABLE→EXPIRED` | — | 爽约/过期扫描（5min） | — |
+| Slot `AVAILABLE→SUSPENDED` | F2 停诊处理 | — | R6 停诊漏处理 |
+| Slot 新建 `AVAILABLE` | F1 排班生成 / E4 加号 | 放号任务（每日 08:00） | — |
+| Reg `WAIT_PAY→BOOKED` | C1 回调入账 | 巡检主动查单 | R4 告警（给了号没收钱） |
+| Reg `WAIT_PAY→CLOSED` | B4 / C2 TIMEOUT | 关单巡检 | — |
+| Reg `BOOKED→SIGNED` | E1 签到 / E2 补签 | — | — |
+| Reg `BOOKED→CANCELED_ACTIVE` | B5 退号 | — | — |
+| Reg `BOOKED→CANCELED_PASSIVE` | F2 停诊处理 | — | R6 |
+| Reg `BOOKED→NOSHOW` | — | 爽约扫描（5min） | — |
+| Reg `SIGNED→COMPLETED` | — | 置完成（每日 23:30） | — |
+| Payment `WAIT_PAY→PAID` | C1 回调 | 巡检主动查单 | — |
+| Payment `WAIT_PAY→CLOSED` | B4 / C2 TIMEOUT | 关单巡检 | — |
+| Payment `PAID→REFUNDED` | C5 退款回调 | — | R3 应退未退 |
+| Refund `WAIT_REFUND→REFUNDED` | C5 退款回调 | — | R3 / R5 |
+
+### 9.2 无端点的状态流转与可观测面
+
+放号（每日 08:00）/ 关单巡检（30s）/ 爽约与过期扫描（5min）/ 置完成（23:30）/ 日终对账（03:00）没有入站 API；契约只覆盖其可观测端点：
+
+- `GET /appt/admin/job-log/list`（任务日志：批号 / 起止 / 影响行数 / 结果 / skipped 标记）
+- `POST /appt/admin/job-log/{id}/rerun`（P1：手动重跑）
+- `GET /appt/admin/reconcile/results`（P1：对账结果列表）
+
+### 9.3 写操作并发与幂等语义总表
+
+| 机制 | 覆盖端点 | 语义 |
+|---|---|---|
+| 三道防线（Redis 占位 → DB CAS → 联合唯一索引） | B1 | 同时间点仅 1 笔成交；Redis 可整体摘除 |
+| 账号行 `FOR UPDATE` | B1 | 限购三条精确判定（竞争只发生在同一用户自身） |
+| `Idempotency-Key`（仅 B1 强制） | B1 | 双击不造两笔待支付单 |
+| CAS 条件即幂等 | B4 / B5 / C1 / C2 / E1 / E2 / F2 | 重复触发第二次影响 0 行 |
+| 批号 + CAS 守卫 | F2 停诊 | 不重复退号 / 退款 / 通知 |
+| `UNIQUE` + 状态 CAS | C1 / C5 回调 | 重复回调只入账一次 |
+
+---
+
+## 10. P0 API 一览表
+
+权限列约定：
+
+- `匿名`：公开接口，需加入 `application.yml` 的 `security.excludes` 白名单
+- `登录`：`@SaCheckLogin`，数据归属服务端按当前用户强过滤
+- `triage`：`@SaCheckRole("triage")`
+- `appt:xxx:yyy`：`@SaCheckPermission`
+
+| 场景 | Method | Endpoint | 身份/权限 | 绑定状态流转 |
+|---|---|---|---|---|
+| 院区列表 | GET | `/appt/public/campus/list` | 匿名 | — |
+| 科室树 | GET | `/appt/public/dept/tree` | 匿名 | — |
+| 医生列表 | GET | `/appt/public/staff/list` | 匿名 | — |
+| 医生主页 | GET | `/appt/public/staff/{id}` | 匿名 | — |
+| 日期栏 | GET | `/appt/public/schedule/dates` | 匿名 | — |
+| 出诊医生 + 午别余量 | GET | `/appt/public/schedule/staffs` | 匿名 | — |
+| 可约时间点 | GET | `/appt/public/slot/list` | 匿名 | — |
+| 提交挂号 | POST | `/appt/patient/registration` | 登录 | Slot `AVAILABLE→TAKEN`；Reg / Payment 新建 `WAIT_PAY` |
+| 我的预约 | GET | `/appt/patient/registration/list` | 登录 | — |
+| 预约详情 | GET | `/appt/patient/registration/{id}` | 登录 | — |
+| 待支付取消 | POST | `/appt/patient/payment/{paymentNo}/cancel` | 登录 | Payment / Reg `→CLOSED`；Slot 回补 |
+| 退号 | POST | `/appt/patient/registration/{id}/cancel` | 登录 | Reg `→CANCELED_ACTIVE`；Slot 回池；退款单新建 |
+| 就诊人列表 | GET | `/appt/patient/patient/list` | 登录 | — |
+| 新增就诊人 | POST | `/appt/patient/patient` | 登录 | — |
+| 渠道回调 | POST | `/appt/public/payment/callback/{channel}` | 匿名（验签） | Payment `→PAID`；Reg `→BOOKED` |
+| 模拟支付 | POST | `/appt/patient/payment/{paymentNo}/mock-pay` | 登录 | 同 C1 / FAIL 无流转 / TIMEOUT 走关单 |
+| 支付状态查询 | GET | `/appt/patient/payment/{paymentNo}` | 登录 | — |
+| 退款回调 | POST | `/appt/public/refund/callback/{channel}` | 匿名（验签） | Refund / Payment `→REFUNDED` |
+| 扫码签到 | POST | `/appt/triage/sign` | triage | Reg `BOOKED→SIGNED` |
+| 手动补签 | POST | `/appt/triage/sign/manual` | triage | 同 E1（sign_type=手动） |
+| 加号登记 | POST | `/appt/triage/extra-slot` | triage | Slot 新建 `AVAILABLE`（加号） |
+| 停诊上报 | POST | `/appt/triage/suspend` | triage | 新建停诊登记（批号） |
+| 排班生成 | POST | `/appt/admin/schedule/generate` | `appt:schedule:add` | Schedule / Slot 新建 |
+| 停诊处理 | POST | `/appt/admin/suspend/handle` | `appt:suspend:handle` | Schedule `→已停诊`；Reg `→CANCELED_PASSIVE`；Slot `→SUSPENDED` |
+| 排班列表 | GET | `/appt/admin/schedule/list` | `appt:schedule:list` | — |
+| 停诊记录 | GET | `/appt/admin/suspend/list` | `appt:suspend:list` | — |
+| 号源查看 | GET | `/appt/admin/slot/list` | `appt:slot:list` | — |
+
+**P1 端点（一览表占位，条目待切片联调前补）**：B8–B10 就诊人改删默认、C4 退款查询、D1–D6 收藏与消息、E3 当日签到列表、F3 对账触发、F4 看板、F8–F24 预约/交易/规则/运维管理、F25–F30 六实体生成器 CRUD。
+
+---
+
+## 11. 待实现层确定事项
+
+1. RuoYi 响应包装与异常类的具体类型（`R<T>` 的当前项目用法）。
+2. HTTP 层通用码（401 / 403 / 参数校验 / 500）的框架级映射。
+3. Sa-Token 登录态获取方式与 token 传递细节（与项目一同款推迟）。
+4. OSS 上传接口复用细节（头像占位图落地前的过渡）。
+5. SpringDoc 分组配置：新增 `appt` 模块后追加 `packages-to-scan: org.dromara.appt`，否则接口不出现在 API 文档。
+6. 渠道密钥管理：mock 演示环境的配置写法；真实渠道的密钥注入方式。
+7. E3 / 分诊数据范围的实现在岗院区存储方式（sys_user 扩展字段 or 数据权限）。
+8. F16 渠道配置落业务表还是 `sys_config`。
