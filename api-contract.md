@@ -980,7 +980,7 @@ POST /appt/admin/suspend/handle
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| suspendId | 是 | E5 停诊上报的登记 ID（两段式：凭批号处理，批号即幂等锚点） |
+| suspendId | 是 | E5 停诊上报的登记 ID。**入参是登记行 ID，不是批号**——服务端按此 ID 取登记行，取其 `batch_no` 作为幂等锚点，并把该行 `status` 由 `PENDING` 置 `HANDLED`；重复提交命中 `HANDLED` 直接返回成功不重做（PRD §6.10 幂等） |
 
 **状态：** Schedule `正常 → 已停诊`；范围内 `WAIT_PAY / BOOKED` 的 Registration → `CANCELED_PASSIVE`（`cancel_type = PASSIVE`，**不计爽约**）；未预约 Slot → `SUSPENDED`；已支付 → 批量新建 Refund（`WAIT_REFUND`）。
 
@@ -1015,6 +1015,7 @@ POST /appt/admin/suspend/handle
 | Slot `AVAILABLE→TAKEN` | B1 提交挂号 | — | R2 号源未占用 |
 | Slot `TAKEN→AVAILABLE` | B4 取消 / B5 退号 | 关单巡检（30s） | R1 幽灵占号 |
 | Slot `AVAILABLE→EXPIRED` | — | 爽约/过期扫描（5min） | — |
+| Slot `TAKEN→EXPIRED` | B4 取消 / B5 退号（回池时 `time_point` 已过，红线 9） | 关单巡检（30s）回补时同上判定 | — |
 | Slot `AVAILABLE→SUSPENDED` | F2 停诊处理 | — | R6 停诊漏处理 |
 | Slot 新建 `AVAILABLE` | F1 排班生成 / E4 加号 | 放号任务（每日 08:00） | — |
 | Reg `WAIT_PAY→BOOKED` | C1 回调入账 | 巡检主动查单 | R4 告警（给了号没收钱） |

@@ -33,7 +33,9 @@
 | # | 决策 | 结论与理由 |
 |---|---|---|
 | **D-S1-1** | `time_point` 落库类型 | **存 `datetime`**。契约 §2.4 的 `HH:mm` 是**对外线值**（VO 层格式化），不是存储形态。若存 `TIME`：技术方案 §3.3 的两条扫描 SQL（`time_point <= NOW() - 30min`、`time_point < NOW()`）与 §6.2 索引 `(time_point, status)` 全部失效，且 `UNIQUE(patient_id, time_point, active_flag)` 会跨日期误判限购（不同天的 09:51 互相冲突）。存 `datetime` 后技术方案**零改动**、限购语义天然正确。→ 需回写契约 §2.4 加一句「`timePoint` 为展示线值，DB 存完整 datetime」 |
-| **D-S1-2** | `appt_slot` 冗余列 | **冗余 `staff_id`/`dept_id`/`campus_id`/`visit_date`/`period`**。技术方案 §3.2 余量聚合按 `(staff, 日期, 午别)` 分组、§3.3 爽约/过期按 `time_point` 扫描，冗余后两者都能单表命中索引，免除 join `schedule` 的 N+1。排班生成后这五个值**不再变更**（唯一变更源是停诊，走 `status`），同步风险可忽略。→ 需回写 PRD §4.2 `appt_slot` 行 |
+| **D-S1-2** | `appt_slot` 冗余列 | **冗余 `staff_id`/`dept_id`/`campus_id`/`visit_date`/`period`**。真实用途两条：① §3.3 爽约/过期按 `time_point` 扫描、停诊按 (staff, date, period) 定位，免 join `schedule` 的 N+1；② 契约 §3.5 `dates` / §3.7 `staffs` 的 staffId 模式要按「某医生某日各午别」聚合余量（M8），依赖 `(staff_id, visit_date, period, status)` 索引。
+> **注**：本条初版把理由写成「技术方案 §3.2 余量聚合按 (staff, 日期, 午别) 分组」，与 §3.2 的实际 SQL（按 `(schedule_id, period)` 分组，契约 §3.6 同）不符——**结论成立但依据写错了，已更正**，勿再引旧依据。
+> 排班生成后这五个值**不再变更**（唯一变更源是停诊，走 `status`）；staff 主数据变更是否追溯另见 §6。→ 已回写 PRD §4.2 `appt_slot` 行 |
 | **D-S1-3** | 就诊人证件号唯一性 | **增 `id_no_hash` 列（HMAC-SHA256 确定性摘要）**，唯一索引建在 `(id_type, id_no_hash)`；`id_no` 存 AES 密文（演示期明文）仅用于脱敏展示。理由：PRD §4.2 约束 6（证件号唯一）与约束 7（生产加密）在随机 IV 加密下**互斥**——密文既不能建唯一索引也不能等值查询。hash 列让两条约束同时成立。→ 需回写 PRD §4.2 约束 7 与技术方案 M11 |
 | **D-S1-4** | 业务单号规则 | **`前缀 + yyyyMMdd + 6 位当日序列`**（如 `R20261018000001`），序列用 Redis `INCR` 每日重置，`varchar(32)`。理由：可读、按日期可排序、演示与排查时肉眼可核对，符合真实医院单号习惯；雪花/UUID 都丢掉了这层信息。代价是一次 Redis 调用，挂号链路本就要访问 Redis（占位 + 余量），可忽略 |
 | **D-S1-5** | 停诊范围的结构化表达 | **`appt_suspend_record` 增 `staff_id` 列**（`SCHEDULE`/`STAFF_DATE` 必填、`CAMPUS_DATE` 可空）；`scope_type` 统一为 `SCHEDULE` / `STAFF_DATE` / `CAMPUS_DATE`（契约 §7.5 的 `DAY`/`RANGE` 一并改）。理由：E5 请求带 `staffId` 而原表无此列，只能把 staffId 拼进 `scope_value` 字符串再反解——F2 要按 staff 定位 schedule，靠字符串解析是脆的；契约 `RANGE` 要求 `scopeValue` 是 `{startDate,endDate}` 对象，塞不进 `varchar(64)`。代价：区间停诊要登记 N 条，换来「同一 `batch_no` 幂等归并」天然可用。**✅ 已于 2026-10-18 落地（appt_schema.sql + 库内重建）** |
@@ -390,7 +392,7 @@
 | id | bigint | PK | |
 | batch_no | varchar(32) | NOT NULL | |
 | check_type | varchar(32) | NOT NULL | R1~R7（技术方案 §3.6） |
-| target_id | bigint | | 目标 slot / registration / payment |
+| target_id | bigint | | **目标 id。类型由 `check_type` 唯一决定**，不另设 `target_type` 列——见 §6 已知边界 |
 | action | varchar(32) | | `AUTO_FIX` / `ALERT` |
 | status | varchar(16) | NOT NULL | `OK`/`FIXED`/`ALERT` |
 | detail | varchar(2000) | | |
@@ -418,7 +420,10 @@
 
 | 表 | 索引 | 服务的不变量/难点 |
 |---|---|---|
+| campus | `(status, sort)` | 院区列表排序（§3.1） |
 | clinic_type | `UNIQUE(code)` | 门诊类型字典唯一 |
+| department | `(parent_id, sort)` / `(level, status)` | 科室树展开、按层级筛选（§3.1） |
+| medical_staff | `(dept_id, status)` / `(campus_id, dept_id, status)` / `(name)` | 医生列表 / 院区筛选 / 姓名 LIKE 搜索（PRD §14.2-10） |
 | slot_template | `UNIQUE(staff_id, period, clinic_type)` | 模板不重复（本设计新增） |
 | fee_standard | `UNIQUE(title, clinic_type)` | 定价唯一（PRD §4.2-5）；**停用行仍占键** → 重新录入同键走「重新启用」而非 insert |
 | **staff_favorite** | **`UNIQUE(user_id, staff_id)`** | **防重复收藏（本设计补 PRD/技术方案遗漏）** |
@@ -481,6 +486,9 @@
 | **`appt_slot` 冗余列的同步边界** | D-S1-2 说「排班生成后五个冗余值不再变更」，那只覆盖了单次业务操作；**后台修改 `appt_medical_staff.campus_id` / `dept_id`（医生换科室、换院区）时不追溯**已生成的 `appt_slot` 与 `appt_registration` 冗余列——与 `fee` 快照同一原则（保护历史单可倒查）。因此可能出现「该医生已调至 B 院区，但历史号源仍挂在 A」的查询结果，**属预期不是 bug**；S1 生成代码时不得当作数据不一致去修 |
 | **`medical_staff.clinic_type` 与 `slot_template.clinic_type` 的冗余** | D-S1-7 给 staff 加了 `clinic_type`，与 `slot_template.clinic_type` / `schedule.clinic_type` 构成一对新冗余。`UNIQUE(staff_id, period, clinic_type)` 允许同一 staff 有多个不同 `clinic_type` 的模板，与「一行 = 一个出诊身份」（PRD §14.3）相冲突。**约定：同一 staff 的所有 `slot_template.clinic_type` 必须等于 `staff.clinic_type`**，`appt_schedule.clinic_type` 同理从 staff 取值；由 Service 层校验（跨表无法用 CHECK）。不遵守则医生主页的 `clinicType` 与排班实际不符 |
 | **`appt_patient.is_default` 的 NULL 语义** | 非默认必须存 `NULL`，**不可存 `0`**——`UNIQUE(user_id, is_default)` 中 0 与 0 会互相冲突，只有 NULL 才互不冲突。代价：VO 的 `isDefault` 对非默认就诊人返回 `null` 而非 `false`，前端按 falsy 处理；批量取消默认要两步（先置 `NULL` 再置 1），不能一次 `UPDATE SET is_default=0` |
+| **状态列 `varchar(16)` 的零余量** | 最长线值 `CANCELED_PASSIVE` 恰好 16 字符，与列宽相等——**当前不会截断**（MySQL 8 严格模式下超长会直接报错，不是静默截断）。**本期不放宽列宽**：改动要再动一次 DDL 与实体，收益只是防一个还没发生的未来值。若将来新增 >16 字符的状态线值，必须同步 `ALTER` 放宽列宽并更新 `chk_reg_active`，否则 INSERT/UPDATE 会报 1406 |
+| **对账结果 `target_id` 的目标类型** | `target_id` 单列混装 slot / registration / refund 三类 id，**目标类型由 `check_type` 唯一决定**：R1→slot、R4/R6→registration、R5→refund、R7→无目标（缓存无 id）。未另设 `target_type` 列——省一列，代价是读结果时必须按 `check_type` 分派，不能只看 id |
+| **`appt_notice` / `appt_slot_ledger` / `appt_payment_callback` 无管理端点** | 三张表**均无写入端点**：`notice` 由系统事件触发（PRD §6.12 七种场景），`slot_ledger` 由状态单柱 append，`payment_callback` 由回调入口 append。读侧也只有 `appt_notice` 有患者端 D4/D5/D6 三个端点，`slot_ledger` 与 `payment_callback` **连查询端点都没有**（排查靠直连库）。PRD §10.2 菜单树同样没有对应页面——S7 需决定补不补「站内信管理 / 台账查询 / 回调记录」页，不补则维持此边界 |
 | **`medical_staff` 删除的引用校验范围** | 上一条「基础数据物理删除」的校验清单只覆盖 `appt_schedule` / `appt_slot` / `appt_registration`。删除 `appt_medical_staff` 前还须额外校验 `appt_staff_favorite.staff_id` 与 `appt_slot_template.staff_id`，否则留下孤儿收藏与孤儿模板 |
 
 ---

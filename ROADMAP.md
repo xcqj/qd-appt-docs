@@ -53,7 +53,7 @@
 - [x] `database-design.md` v0.1（20 表字段级设计 + 索引总表 + 不变量映射）
 - [x] `appt_schema.sql` 20 表在 `appt` 库建成（2026-10-18，backend `0f0bfff`）
 - [x] I1 兜底实测：同一 slot 有效单成功 / 终态单（`active_flag=NULL`）共存 / 第二笔有效单被 `uk_reg_slot_active` 以 1062 拒
-- [ ] 20 张表走 RuoYi 生成器，按 `backend/AGENTS.md` §4 坑位手工校正
+- [ ] 20 张表走 RuoYi 生成器，按 `backend/AGENTS.md` **§6** 坑位手工校正（§4 是领域红线，生成器坑位在 §6）
 - [ ] 后台六实体维护页可用（院区 / 门诊类型 / 科室树 / 医务人员 / 收费标准 / 时段模板）
 - [ ] **三条实现约束落地**（不设 `del_flag` 的还债，缺一即出 bug）：
   1. 物理删除前做引用校验——被 `schedule` / `slot` / `registration` 引用的基础数据拒绝删除并提示先停用
