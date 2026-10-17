@@ -17,7 +17,7 @@
 | 1 | 字符集 `utf8mb4` / 排序 `utf8mb4_general_ci` | 与框架库 `ry_vue` 一致（`appt` 库已按此建） |
 | 2 | 主键 `bigint`，**雪花**（`mybatis-plus.global-config.db-config.idType: ASSIGN_ID`，见 `ruoyi-common-mybatis/common-mybatis.yml`） | 跟随框架默认，**不自增**——自增在分库分表/数据合并时会撞号，且不必要地暴露业务量 |
 | 3 | 公共字段五件套 `create_dept` / `create_by` / `create_time` / `update_by` / `update_time`（Java 侧 `extends BaseEntity`） | 框架审计字段，后台列表与数据权限依赖 |
-| 4 | **不设 `del_flag`** | 6.0.0 的 `BaseEntity` 已无此列。更关键的是：逻辑删除会让终态行**仍留在唯一索引里**，直接击穿 `UNIQUE(slot_id, active_flag)` 的 NULL 兜底（M1）。业务终态一律用 `status` + `active_flag` 表达 |
+| 4 | **不设 `del_flag`** | 逻辑删除会让终态行**仍留在唯一索引里**，直接击穿 `UNIQUE(slot_id, active_flag)` 的 NULL 兜底（M1）。业务终态一律用 `status` + `active_flag` 表达。**注（2026-10-18 更正）**：6.0.0 的 `BaseEntity` 确实不再内置 `delFlag`，但 `SysUser`/`SysDept`/`SysRole`/`SysPost`/`SysClient` **各自单独声明了该列**、代码生成器 也认 `del_flag`——**框架仍完全支持**，不是「已无此列」。不用它的理由是 M1，不是框架不支持。**代价**：过滤必须每个查询手工带 `status='0'`（`del_flag` 由框架自动注入），见 §6 边界 |
 | 5 | 状态字段分两类：**契约涉及的**用 `varchar(16)` 存契约线值（`WAIT_PAY`/`AVAILABLE`/…）；**纯后台启停**用 `char(1)` `'0'`正常/`'1'`停用 | 前者与契约 §2.7 线值一一对应，MyBatis 零转换、排查直观、导出即语义；后者是 RuoYi 惯例且代码生成器原生识别，不值得为它破坏惯例 |
 | 6 | 金额 `decimal(10,2)`，Java `BigDecimal` | 与契约 §2.4「金额两位小数」一致；**不存分**——挂号费档位 15~300 元，decimal 语义直白，简历上讲得清楚，且避免分/元转换在回调与对账处出错 |
 | 7 | 时间 `datetime`（秒级）；纯日期 `date`；模板内时刻 `time` | 与 `LocalDateTime` 对应。秒级足够——`time_point` 最小步长 4 分钟，无亚秒语义 |
@@ -58,7 +58,7 @@
 | 对账 `status` | `OK` 正常 / `FIXED` 已自动修复 / `ALERT` 待人工 | 后台「运维对账」菜单（技术方案 §3.6） |
 | 退号/退款原因 `reason` | 自由文本 | 不做枚举，避免枚举膨胀 |
 
-**启停类**（不出现在契约中）：`char(1)` `'0'` 正常 / `'1'` 停用——院区、科室、医务人员、就诊人、黑名单。
+**启停类**（不出现在契约中）：`char(1)` `'0'` 正常 / `'1'` 停用——院区、门诊类型、科室、医务人员、**收费标准**、时段模板、就诊人、黑名单（**8 张基础表全部有此列**；`fee_standard` 于 2026-10-18 补，此前遗漏——见 §1 公约 4 与 §6 边界）。
 
 ---
 
@@ -161,6 +161,7 @@
 | title | varchar(32) | NOT NULL | 职称线值 |
 | clinic_type | varchar(32) | NOT NULL | 门诊类型 code |
 | fee | decimal(10,2) | NOT NULL | |
+| status | char(1) | NOT NULL | `'0'` 正常 / `'1'` 停用。**2026-10-18 补**——此前遗漏，导致错误录入的收费标准无法下线（只能改价或物理删除）。历史金额不受影响（`registration.fee` 快照） |
 
 索引：**`UNIQUE(title, clinic_type)`**（PRD §4.2-5；增改撞键返回明确错误，不静默覆盖——契约 §8-3）。
 
@@ -406,7 +407,7 @@
 |---|---|---|
 | clinic_type | `UNIQUE(code)` | 门诊类型字典唯一 |
 | slot_template | `UNIQUE(staff_id, period, clinic_type)` | 模板不重复（本设计新增） |
-| fee_standard | `UNIQUE(title, clinic_type)` | 定价唯一（PRD §4.2-5） |
+| fee_standard | `UNIQUE(title, clinic_type)` | 定价唯一（PRD §4.2-5）；**停用行仍占键** → 重新录入同键走「重新启用」而非 insert |
 | **staff_favorite** | **`UNIQUE(user_id, staff_id)`** | **防重复收藏（本设计补 PRD/技术方案遗漏）** |
 | schedule | `UNIQUE(staff_id, visit_date, period)` | 排班生成幂等 |
 | schedule | `(visit_date, status)` | 按日筛选、停诊范围定位 |
@@ -456,6 +457,9 @@
 | `slot_ledger` / `payment_callback` 数据量 | 演示量级不分区；生产需按月分区 + 冷归档（PRD §13.2 本期不做） |
 | `payment_callback` 的 NULL 去重缺口 | Mock 渠道以 `(payment_no, trade_no)` 实际去重，对账 R3 兜底（见 §3.5 表下说明） |
 | 就诊人证件被其他账号绑定 | 本期不做解绑流程（PRD §14.3） |
+| 启停类基础表停用后重新录入 | `uk_clinic_type_code` / `uk_template_staff_period_type` / `uk_fee_title_type` / `uk_patient_id_hash` 四个唯一键在停用后**仍占位** → 一律走「命中停用行则重新启用」，不走 insert（否则 1062） |
+| 基础数据物理删除 | **不建外键**，删掉被 `schedule` / `slot` / `registration` 引用的基础数据会**静默产生孤儿** → 删除前必须做引用校验（有引用则拒绝并提示先停用）；从没被引用的新记录才允许物理删除 |
+| `status` 过滤的两套查询 | 前台下拉（院区 / 科室 / 医生 / 就诊人）一律带 `status='0'`；**后台管理列表不带**（否则停用后从后台也看不见，无法恢复）。生成代码不会自动带此条件，漏写即 bug |
 | 医务人员跨院区出诊 | 本期一行 = 一个出诊身份；后续拆 `staff_campus` 链接表（M7） |
 | 停诊时已签到挂号单 | 本期不参与批量退号（PRD §14.3） |
 | 索引体积 | `varchar` 状态列比 `tinyint` 每索引项多约 15 字节；演示量级（万级）无影响，生产量级需复核（§1-5 的取舍） |
