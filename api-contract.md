@@ -1,6 +1,6 @@
 # 号源 QueueDepth · API 契约
 
-> 文档状态：v0.1（2026-10-17 创建；§1–§3 定稿：总体约定 + 公开查询组；§4–§11 按四次会话计划推进中）
+> 文档状态：v0.1（2026-10-17 创建；§1–§4 定稿：总体约定 + 公开查询组 + 挂号组；§5–§11 按四次会话计划推进中）
 > 用途：作为 `appt` 模块后端 API 的业务契约，供开发、Review、测试和 AI Agent 实现时使用。
 >
 > 本文定义接口契约与业务语义，不规定具体 Java 类名、RuoYi 返回包装类型、MyBatis-Plus 调用方式、异常类等实现细节。实现时以当前 RuoYi-Vue-Plus 源码中的真实模式为准。
@@ -103,6 +103,19 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 ### 2.6 上传与导出
 
 本期不做：医生头像等用占位图（PRD §11）；OSS 上传复用 RuoYi 现有能力，不在本契约展开；导出功能本期不做。
+
+### 2.7 状态枚举线值
+
+状态字段在请求 / 响应中的线值（PRD §7 状态机中文名 → wire value 映射，前后端以此为准）：
+
+| 实体 | 线值 |
+|---|---|
+| Registration 挂号单 | `WAIT_PAY` 待支付 / `BOOKED` 已预约 / `SIGNED` 已签到 / `COMPLETED` 已完成 / `CLOSED` 已关闭 / `CANCELED_ACTIVE` 已退号(主动) / `CANCELED_PASSIVE` 已退号(被动) / `NOSHOW` 已爽约 |
+| Payment 支付单 | `WAIT_PAY` 待支付 / `PAID` 已支付 / `CLOSED` 已关闭 / `REFUNDED` 已退款 |
+| Slot 号源 | `AVAILABLE` 可约 / `TAKEN` 已占 / `SUSPENDED` 已停诊 / `EXPIRED` 已过期 |
+| 挂号单 settleStatus | `NONE` 无结算 / `WAIT_REFUND` 待退费 / `REFUNDED` 已退费 |
+
+公开查询组（§3）只暴露 `AVAILABLE` 的号源；其余态不出现在公开响应中。
 
 ---
 
@@ -312,9 +325,246 @@ slots: [{
 
 ---
 
+## 4. 挂号组 `/appt/patient/**`（B1–B10）
+
+> 组首说明：挂号单生命周期，全部登录（`@SaCheckLogin`），数据范围按 `user_id` 服务端强过滤（不信任前端传入的任何 ID，红线 10）。
+> 限购与黑名单均按账号（`user_id`）口径（PRD §6.5 / §6.9、红线 14）；状态机依据 PRD §7.2，线值见 §2.7。
+
+### 4.1 提交挂号（B1）
+
+```http
+POST /appt/patient/registration
+```
+
+**身份：** 登录。
+
+**请求头：**
+
+| 头 | 必填 | 说明 |
+|---|---|---|
+| Idempotency-Key | 是 | 客户端生成的 UUID；缺失返回 400 |
+
+**请求：**
+
+```json
+{
+  "slotId": 1001,
+  "patientId": 88
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| slotId | 是 | 目标号源；scheduleId / visitDate / period / timePoint / fee 全部由服务端从 slot 推导，请求体不带 |
+| patientId | 是 | 就诊人，必须属于当前账号 |
+
+**业务行为：**（单事务，顺序见技术方案 §3.1）
+
+```text
+① Redis 占位：SET appt:slot:hold:{slotId} {registrationNo} NX EX 15min
+   失败 → SLOT_GONE（快速失败，不打到 DB）
+② BEGIN
+③ SELECT sys_user WHERE user_id = 当前用户 FOR UPDATE
+   ——账号行锁：串行化同一用户的并发挂号，使 ④ 的检查精确
+④ 锁内精查：黑名单 / 有效预约计数（WAIT_PAY+BOOKED+SIGNED）≥ 3 /
+   号源 AVAILABLE + 排班未停诊 + 日期在窗口内
+⑤ INSERT registration（registration_no 预生成；status=WAIT_PAY；
+   active_flag=1；fee = slot.fee 快照）
+   撞 UNIQUE(slot_id, active_flag) → SLOT_GONE
+   撞限购联合唯一 → LIMIT_DEPT_DAY / LIMIT_TIME_CONFLICT
+⑥ UPDATE slot SET status=TAKEN, registration_id=? WHERE id=? AND status=AVAILABLE
+   影响行数 0 → SLOT_GONE，整体回滚
+⑦ INSERT payment（payment_no；amount = registration.fee；
+   expire_time = now + 15min；status=WAIT_PAY）
+⑧ COMMIT
+⑨ afterCommit：余量缓存 DECR + 发「挂号成功待支付」站内信
+```
+
+**状态：** Slot `AVAILABLE → TAKEN`；Registration（新建）`WAIT_PAY`；Payment（新建）`WAIT_PAY`。
+
+**前置条件：**
+
+- 已登录，`patientId` 归属当前账号
+- 号源可约、排班未停诊、`visit_date ∈ [今日+1, 今日+7]`
+- 账号未命中黑名单；同时持有有效预约 < 3
+- 该就诊人同科室同日未挂；同一时间点未挂其他医生
+
+**返回至少：**
+
+```text
+registrationId
+registrationNo     就诊码内容
+paymentNo
+amount             挂号费快照（元）
+expireTime         支付截止（yyyy-MM-dd HH:mm:ss）
+staffName
+deptName
+campusName
+visitDate
+period
+timePoint
+```
+
+**约束：**
+
+- 幂等键命中 → 返回**首次受理结果**并附 `DUPLICATE_SUBMIT`（非失败语义，前端直接渲染结果，不报错）。
+- 金额只认 `slot.fee` 快照；请求体携带金额一律忽略。
+- Redis 不可用 → 跳过 ①，降级为纯 DB CAS（正确性不降，PRD §9.7）。
+- ⑤~⑦ 任一步失败 → 整体回滚 + Lua 比对 value 后删除占位 key（TTL 兜底）。
+
+### 4.2 我的预约列表（B2）
+
+```http
+GET /appt/patient/registration/list?status=&patientId=&pageNum=&pageSize=
+```
+
+**身份：** 登录。
+
+**请求参数：**
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| status | 是 | Registration 线值之一（§2.7），对应前端「我的预约」状态 tab |
+| patientId | 否 | 就诊人 ID；传入则按该就诊人过滤（账号名下，切换就诊人视角） |
+| pageNum / pageSize | 否 | 默认 1 / 10 |
+
+**返回至少：**
+
+```text
+rows: [{
+  registrationId
+  registrationNo
+  patientId
+  patientName
+  staffName
+  deptName
+  campusName
+  visitDate
+  period
+  timePoint
+  fee
+  status
+  settleStatus
+  signTime        已签到才有
+  cancelType      已退号才有（主动 / 停诊）
+}]
+total
+```
+
+### 4.3 预约详情（B3）
+
+```http
+GET /appt/patient/registration/{id}
+```
+
+**身份：** 登录。
+
+**业务行为：** 仅返回当前 `user_id` 名下的挂号单；不匹配按「资源不存在」处理（不泄露存在性）。
+
+**返回至少：**
+
+```text
+registrationId / registrationNo
+status / settleStatus / cancelType
+patient: { patientId, name, idType, idNoMasked }
+staff: { staffId, name, title, deptName, campusName }
+visitDate / period / timePoint / fee
+payment: { paymentNo, amount, status, expireTime, payTime }
+refund: { refundNo, amount, status, reason }    有退款单才有
+visitCode                                    就诊码（= registrationNo）
+signTime
+```
+
+**约束：**
+
+- `idNoMasked` 脱敏展示（如 `3701**********41`）；完整证件号不进任何响应（仅 B7 / B8 传输）。
+- `visitCode` 仅 `status ∈ {BOOKED, SIGNED, COMPLETED}` 时返回；`WAIT_PAY` / `CLOSED` / 已退号 / `NOSHOW` 不返回。
+
+### 4.4 待支付取消（B4）
+
+```http
+POST /appt/patient/payment/{paymentNo}/cancel
+```
+
+**身份：** 登录。
+
+**状态：** Payment `WAIT_PAY → CLOSED`；Registration `WAIT_PAY → CLOSED`；Slot `TAKEN → AVAILABLE`（`time_point` 已过则 `→ EXPIRED`）。
+
+**前置条件：** 支付单属于当前用户且 `status = WAIT_PAY`（否则 `PAYMENT_CLOSED` / `REG_STATE_INVALID`）。
+
+**业务行为：** 与超时关单同一事务形状（技术方案 §3.4）：三步 CAS 均以 `WAIT_PAY` 为条件（重复触发第二次全部影响 0 行）+ 台账 + afterCommit 余量 +1 + 关单站内信。**不涉及退款**（未发生支付）。
+
+### 4.5 退号（B5）
+
+```http
+POST /appt/patient/registration/{id}/cancel
+```
+
+**身份：** 登录。
+
+**状态：** Registration `BOOKED → CANCELED_ACTIVE`（`cancel_type = 主动`）；Slot `TAKEN → AVAILABLE`（已过 `time_point` → `EXPIRED`）；已支付 → 新建 Refund（`WAIT_REFUND`）+ `settleStatus = WAIT_REFUND`。
+
+**前置条件：**
+
+- 属于当前用户
+- `status = BOOKED`（否则 `REG_STATE_INVALID`）
+- `now < 就诊前一日 23:00`（否则 `REFUND_DEADLINE_PASSED`，PRD §6.7）
+
+**业务行为：** 退号事务 → 已支付则创建退款单（`refund_no` 唯一 + 状态 CAS 防重退）→ 渠道退款走异步链路（§5）→ 回调入账后 `settleStatus = REFUNDED` + 站内信。
+
+**约束：**
+
+- 主动退号**计入**黑名单统计口径（半年内退号 + 爽约合计，PRD §6.9）；停诊被动退号不计入。
+- 爽约由扫描判定（PRD §6.8），不经过本端点。
+
+### 4.6 就诊人列表（B6）
+
+```http
+GET /appt/patient/patient/list
+```
+
+**身份：** 登录。
+
+**返回至少：** `patientId / name / idType / idNoMasked / isDefault`，按 `is_default` 倒序 + 创建时间排序。
+
+### 4.7 新增就诊人（B7）
+
+```http
+POST /appt/patient/patient
+```
+
+**身份：** 登录。
+
+**请求：**
+
+```json
+{
+  "name": "林晚晴",
+  "idType": "ID_CARD",
+  "idNo": "370102199001011234",
+  "isDefault": false
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| name | 是 | 就诊人姓名 |
+| idType | 是 | `ID_CARD` 身份证 / `CARD_NO` 就诊卡 |
+| idNo | 是 | 完整证件号（仅本端点与 B8 传输；身份证号全局唯一、就诊卡号院内唯一，PRD §4.2-6） |
+| isDefault | 否 | 默认 false；true 则同事务取消其它默认 |
+
+**前置条件：** 当前账号就诊人 < 10（否则 `PATIENT_LIMIT_EXCEEDED`）；证件未被其他账号绑定（本期不做解绑流程，已知边界见 PRD §14.3）。
+
+**约束：** `idNo` 禁止进日志（红线 15）；存储按技术方案 M11 预留加密位。
+
+### 4.8 修改 / 删除 / 设默认就诊人（B8–B10）——P1 占位
+
+`PUT /appt/patient/patient/{id}`、`DELETE /appt/patient/patient/{id}`、`PUT /appt/patient/patient/{id}/default`：登录；数据范围按 `user_id`；删除约束（名下有挂号单的就诊人禁止删除）与字段语义在 S3 前端联调前补条目。
+
+---
+
 ## 待完成（按四次会话计划推进）
 
-- §4 挂号组 `/appt/patient/**`（会话 2）
 - §5 支付组（会话 3）
 - §6 患者辅助组（会话 4）
 - §7 分诊组 `/appt/triage/**`（会话 4）
