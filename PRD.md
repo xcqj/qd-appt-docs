@@ -98,12 +98,12 @@
 | 表 | 说明 | 关键字段 |
 |---|---|---|
 | `appt_campus` | 院区 | id, name, address, cover_url, status |
-| `appt_clinic_type` | 门诊类型 | id, code, name |
-| `appt_department` | 科室三级树（全局） | id, parent_id, name, level(1/2/3), sort |
+| `appt_clinic_type` | 门诊类型 | id, code, name, status；唯一键 (code) |
+| `appt_department` | 科室三级树（全局） | id, parent_id, name, level(1/2/3), sort, status |
 | `appt_medical_staff` | 医务人员 | id, **campus_id**, dept_id, name, avatar, title(职称), degree, type(医生/护士), intro, status |
-| `appt_staff_favorite` | 医生收藏 | id, user_id, staff_id |
-| `appt_slot_template` | 时段模板 | id, staff_id, period(上午/下午/夜间), start_time, end_time, step_minutes, clinic_type |
-| `appt_fee_standard` | 收费标准 | id, title(职称), clinic_type, fee；唯一键 (title, clinic_type) |
+| `appt_staff_favorite` | 医生收藏 | id, user_id, staff_id；唯一键 (user_id, staff_id) |
+| `appt_slot_template` | 时段模板 | id, staff_id, period(上午/下午/夜间), start_time, end_time, step_minutes, clinic_type, status；唯一键 (staff_id, period, clinic_type) |
+| `appt_fee_standard` | 收费标准 | id, title(职称), clinic_type, fee, status；唯一键 (title, clinic_type) |
 | `appt_schedule` | 排班 | id, staff_id, dept_id, clinic_type, visit_date, period, status(正常/已停诊)；唯一键 (staff_id, visit_date, period) |
 | `appt_slot` | **号源** | id, schedule_id, **staff_id / dept_id / campus_id / visit_date / period（冗余，S1 D-S1-2：余量聚合与爽约扫描免 join）**, **time_point（datetime 完整时刻，D-S1-1）**, fee, status, source(正常/加号), registration_id；唯一键 **(schedule_id, time_point)** |
 | `appt_slot_ledger` | 号源台账 | id, slot_id, action(生成/占用/释放/回补/停诊/过期), before_status, after_status, registration_id, create_time |
@@ -124,7 +124,7 @@
 2. **`period`（午别）为枚举**：上午 / 下午 / **夜间**，各自有默认起止时刻（夜间约 17:00 起）。列表聚合时午别数量 2~3 可变，必须动态分组。
 3. **`fee` 落 Slot，并冗余至 Registration**（金额快照，保护历史订单）。
 4. `SlotTemplate` 不设容量字段，生成数量由 `(end_time - start_time) / step_minutes` 决定。
-5. 唯一键：`appt_schedule(staff_id, visit_date, period)`、`appt_slot(schedule_id, time_point)`、**`appt_registration(slot_id, active_flag)` 联合唯一索引**（active_flag=1 有效挂号、终态置 NULL——MySQL 唯一索引中 NULL 互不冲突，号源回池复用天然成立；一个号最多一笔有效挂号，最终兜底）、`appt_payment(payment_no)`。限购复合规则同法：`UNIQUE(patient_id, dept_id, visit_date, active_flag)`、`UNIQUE(patient_id, time_point, active_flag)`。
+5. 唯一键：`appt_clinic_type(code)`、`appt_slot_template(staff_id, period, clinic_type)`、`appt_fee_standard(title, clinic_type)`、`appt_staff_favorite(user_id, staff_id)`、`appt_patient(id_type, id_no_hash)`、`appt_schedule(staff_id, visit_date, period)`、`appt_slot(schedule_id, time_point)`、**`appt_registration(slot_id, active_flag)` 联合唯一索引**（active_flag=1 有效挂号、终态置 NULL——MySQL 唯一索引中 NULL 互不冲突，号源回池复用天然成立；一个号最多一笔有效挂号，最终兜底）、`appt_payment(payment_no)`、`appt_refund(refund_no)`。限购复合规则同法：`UNIQUE(patient_id, dept_id, visit_date, active_flag)`、`UNIQUE(patient_id, time_point, active_flag)`。
 6. 就诊人身份：身份证号全局唯一，就诊卡号院内唯一；同一证件只能归属一个账号。
 7. **PII**：就诊人证件号（`id_no`）属个人敏感信息——演示数据虚构可明文存储，代码预留列加密接口位（AES/GM），生产必须加密存储 + 脱敏展示；日志禁止打印证件号。**加密与唯一性共存靠 `id_no_hash`**（S1 D-S1-3）：随机 IV 的 AES 密文无法建唯一索引、无法等值查询，故增存 HMAC-SHA256 确定性摘要，**唯一性校验与检索一律走 hash，密文列只用于脱敏展示**——否则约束 6（证件号唯一）与本条（加密存储）互斥。
 
@@ -286,7 +286,7 @@
 | 项 | 规则 |
 |---|---|
 | 粒度 | 单个午别 / 整天 / 日期区间 |
-| 已挂号单 | **待支付 / 已预约**的单批量转「已退号（被动）」，`cancel_type = 停诊`，**不计爽约**；已支付则批量退款。**已签到的单不参与批量退号**（患者已在院，走现场人工协调，本期简化边界见 §14.3） |
+| 已挂号单 | **待支付 / 已预约**的单批量转「已退号（被动）」，`cancel_type = PASSIVE`，**不计爽约**；已支付则批量退款。**已签到的单不参与批量退号**（患者已在院，走现场人工协调，本期简化边界见 §14.3） |
 | 未预约号源 | 标记「已停诊」，不可约 |
 | 通知 | 向全部受影响患者发站内信 |
 | 幂等 | 停诊操作带批号，重复执行不重复通知、不重复退号、不重复退款 |
@@ -421,10 +421,13 @@ GET  /appt/admin/dashboard                        数据看板
 
 | 任务 | 方式 | 频率 | 说明 |
 |---|---|---|---|
-| 放号 | `@Scheduled` | 每日 08:00 | 为"今日+7"生成排班与号源 |
-| 爽约判定 + 号源过期（合并扫描） | `@Scheduled` | 每 5 分钟 | 同一扫描两类行：`status='已预约' AND time_point <= NOW()-30min` → CAS 置「已爽约」（+ 黑名单计数 + 站内信）；`status='可约' AND time_point < NOW()` → CAS 置「已过期」（当日不可约，无需 +30 宽限）。半开窗口主批处理 + `time_point <= now-35min` 全量兜底，`(time_point, status)` 索引 |
-| 置完成 | `@Scheduled` | 每日 23:30 | 已签到且就诊日已过 → 置「已完成」 |
-| 日终对账 | `@Scheduled` | 每日 03:00 | 见 9.6 |
+| 放号 | `snail-job` | 每日 08:00 | 为"今日+7"生成排班与号源 |
+| 爽约判定 + 号源过期（合并扫描） | `snail-job` | 每 5 分钟 | 同一扫描两类行：`status='已预约' AND time_point <= NOW()-30min` → CAS 置「已爽约」（+ 黑名单计数 + 站内信）；`status='可约' AND time_point < NOW()` → CAS 置「已过期」（当日不可约，无需 +30 宽限）。半开窗口主批处理 + `time_point <= now-35min` 全量兜底，`(time_point, status)` 索引 |
+| 置完成 | `snail-job` | 每日 23:30 | 已签到且就诊日已过 → 置「已完成」 |
+| 日终对账 | `snail-job` | 每日 03:00 | 见 9.6 |
+
+> **任务载体（2026-10-18 拍板，技术细节见技术方案 §1.2 / §3.3）**：统一使用框架自带的 **snail-job 2.0.2**；保留 Redisson `tryLock(0, -1)` 防多实例叠加，两者职责不重叠。
+> 不用 Spring `@Scheduled` 的三条理由：① 失败不可见、无重试；② 多实例部署时出现隔离失败或跳过本轮，没有任何痕迹；③ 爽约扫描的硬要求「某轮被跳过不能永久漏判」需要失败可见与重试兜底，`@Scheduled` 静默跳过无从察觉。
 
 ### 9.4 超时关单与库存回补
 

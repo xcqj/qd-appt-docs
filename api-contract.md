@@ -129,6 +129,9 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 | 号源台账 `action` | `GENERATE` / `OCCUPY` / `RELEASE` / `REFILL` / `SUSPEND` / `EXPIRE` |
 | 取消类型 `cancelType` | `ACTIVE` 主动 / `PASSIVE` 被动 |
 | 排班状态 `schedule.status` | `NORMAL` 正常 / `SUSPENDED` 已停诊 |
+| 定时任务 `job.status` | `RUNNING` 执行中 / `SUCCESS` 成功 / `FAIL` 失败 |
+| 支付回调 `callback.processStatus` | `PENDING` 待处理 / `SUCCESS` 已入账 / `IGNORED` 重复丢弃 / `FAILED` 处理失败 |
+| 对账结果 `reconcile.status` | `OK` 正常 / `FIXED` 已自动修复 / `ALERT` 待人工 |
 
 > 院区 / 门诊类型 / 科室 / 医务人员 / **收费标准** / 时段模板 / 就诊人 / 黑名单的**启停**用 `char(1)`（`'0'` 正常 / `'1'` 停用），不属契约线值，仅后台管理使用，前端不感知。
 
@@ -517,7 +520,7 @@ POST /appt/patient/registration/{id}/cancel
 
 **身份：** 登录。
 
-**状态：** Registration `BOOKED → CANCELED_ACTIVE`（`cancel_type = 主动`）；Slot `TAKEN → AVAILABLE`（已过 `time_point` → `EXPIRED`）；已支付 → 新建 Refund（`WAIT_REFUND`）+ `settleStatus = WAIT_REFUND`。
+**状态：** Registration `BOOKED → CANCELED_ACTIVE`（`cancel_type = ACTIVE`）；Slot `TAKEN → AVAILABLE`（已过 `time_point` → `EXPIRED`）；已支付 → 新建 Refund（`WAIT_REFUND`）+ `settleStatus = WAIT_REFUND`。
 
 **前置条件：**
 
@@ -558,7 +561,7 @@ POST /appt/patient/patient
 ```json
 {
   "name": "林晚晴",
-  "idType": "ID_CARD",
+  "idType": "IDCARD",
   "idNo": "370102199001011234",
   "isDefault": false
 }
@@ -567,7 +570,7 @@ POST /appt/patient/patient
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | name | 是 | 就诊人姓名 |
-| idType | 是 | `ID_CARD` 身份证 / `CARD_NO` 就诊卡 |
+| idType | 是 | `IDCARD` 身份证 / `CARD` 就诊卡 |
 | idNo | 是 | 完整证件号（仅本端点与 B8 传输；身份证号全局唯一、就诊卡号院内唯一，PRD §4.2-6） |
 | isDefault | 否 | 默认 false；true 则同事务取消其它默认 |
 
@@ -978,7 +981,7 @@ POST /appt/admin/suspend/handle
 |---|---|---|
 | suspendId | 是 | E5 停诊上报的登记 ID（两段式：凭批号处理，批号即幂等锚点） |
 
-**状态：** Schedule `正常 → 已停诊`；范围内 `WAIT_PAY / BOOKED` 的 Registration → `CANCELED_PASSIVE`（`cancel_type = 停诊`，**不计爽约**）；未预约 Slot → `SUSPENDED`；已支付 → 批量新建 Refund（`WAIT_REFUND`）。
+**状态：** Schedule `正常 → 已停诊`；范围内 `WAIT_PAY / BOOKED` 的 Registration → `CANCELED_PASSIVE`（`cancel_type = PASSIVE`，**不计爽约**）；未预约 Slot → `SUSPENDED`；已支付 → 批量新建 Refund（`WAIT_REFUND`）。
 
 **业务行为：** 分批事务（≤100/批，红线 12）+ 批号 CAS 守卫；**重复执行第二次全部影响 0 行**（不重复退号 / 退款 / 通知，PRD §6.10）；全部受影响患者发站内信；退款走 §5.5 异步链路。
 

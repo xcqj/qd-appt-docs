@@ -36,6 +36,10 @@
 | **D-S1-2** | `appt_slot` 冗余列 | **冗余 `staff_id`/`dept_id`/`campus_id`/`visit_date`/`period`**。技术方案 §3.2 余量聚合按 `(staff, 日期, 午别)` 分组、§3.3 爽约/过期按 `time_point` 扫描，冗余后两者都能单表命中索引，免除 join `schedule` 的 N+1。排班生成后这五个值**不再变更**（唯一变更源是停诊，走 `status`），同步风险可忽略。→ 需回写 PRD §4.2 `appt_slot` 行 |
 | **D-S1-3** | 就诊人证件号唯一性 | **增 `id_no_hash` 列（HMAC-SHA256 确定性摘要）**，唯一索引建在 `(id_type, id_no_hash)`；`id_no` 存 AES 密文（演示期明文）仅用于脱敏展示。理由：PRD §4.2 约束 6（证件号唯一）与约束 7（生产加密）在随机 IV 加密下**互斥**——密文既不能建唯一索引也不能等值查询。hash 列让两条约束同时成立。→ 需回写 PRD §4.2 约束 7 与技术方案 M11 |
 | **D-S1-4** | 业务单号规则 | **`前缀 + yyyyMMdd + 6 位当日序列`**（如 `R20261018000001`），序列用 Redis `INCR` 每日重置，`varchar(32)`。理由：可读、按日期可排序、演示与排查时肉眼可核对，符合真实医院单号习惯；雪花/UUID 都丢掉了这层信息。代价是一次 Redis 调用，挂号链路本就要访问 Redis（占位 + 余量），可忽略 |
+| **D-S1-5** | 停诊范围的结构化表达 | **`appt_suspend_record` 增 `staff_id` 列**（`SCHEDULE`/`STAFF_DATE` 必填、`CAMPUS_DATE` 可空）；`scope_type` 统一为 `SCHEDULE` / `STAFF_DATE` / `CAMPUS_DATE`（契约 §7.5 的 `DAY`/`RANGE` 一并改）。理由：E5 请求带 `staffId` 而原表无此列，只能把 staffId 拼进 `scope_value` 字符串再反解——F2 要按 staff 定位 schedule，靠字符串解析是脆的；契约 `RANGE` 要求 `scopeValue` 是 `{startDate,endDate}` 对象，塞不进 `varchar(64)`。代价：区间停诊要登记 N 条，换来「同一 `batch_no` 幂等归并」天然可用。**⏳ DDL 待落地** |
+| **D-S1-6** | 护士 / 护师的挂号费档位 | **`title` 线值增护师系列**（与既有四个医师系列并列），使 `medical_staff.type = NURSE` 的医务人员也能在 `appt_fee_standard` 上定价。理由：PRD §6.4 有「副主任护师（夜间）¥7.00」，但既有 `title` 只有 `CHIEF`/`ASSOC_CHIEF`/`ATTENDING`/`PHYSICIAN` 四个医师系列——不补则 S2 给护士生成 slot 时取不到 `fee` 档位。**⏳ 契约 §2.7 与 §2 待同步** |
+| **D-S1-7** | 医生的门诊类型归属 | **`appt_medical_staff` 增 `clinic_type varchar(32)` 列**。理由：契约 §3.4 医生主页要返回 `clinicType`，但门诊类型原本只挂在 `appt_slot_template` / `appt_schedule` 上，一个医生可有多模板多门诊类型，取哪个未定义。PRD §14.3 已定「一行 = 一个出诊身份」，staff 行本身就该带门诊类型，模板只是它的时段配置。**⏳ DDL 待落地** |
+| **D-S1-8** | 默认就诊人的唯一性 | **改造 `appt_patient.is_default`：由 `tinyint(1) NOT NULL DEFAULT 0` 改为可空、`DEFAULT NULL`，语义变为「1 = 默认 / NULL = 非默认」，并在 `(user_id, is_default)` 上建唯一索引**——沿用 M1 的「NULL 互不冲突」手法，让「一个账号最多一个默认就诊人」成为 DB 事实而非应用约定。理由：原设计只有应用层「同事务取消其它默认」，并发下两个请求可同时设成两个默认。**未采纳「新增 `default_flag` 列」方案**——那会引入第二个语义相同的列并要求手工同步两者，多一列 + 一处不一致风险；直接改造 `is_default` 是单列单真相。代价：VO 的 `isDefault` 对非默认就诊人返回 `null` 而非 `false`，前端需按 falsy 处理；批量取消默认要两步（先置 `NULL` 再置 1），不能一次 `UPDATE SET is_default=0`。**⏳ DDL 待落地** |
 
 ---
 
@@ -463,6 +467,8 @@
 | 医务人员跨院区出诊 | 本期一行 = 一个出诊身份；后续拆 `staff_campus` 链接表（M7） |
 | 停诊时已签到挂号单 | 本期不参与批量退号（PRD §14.3） |
 | 索引体积 | `varchar` 状态列比 `tinyint` 每索引项多约 15 字节；演示量级（万级）无影响，生产量级需复核（§1-5 的取舍） |
+| **`appt_slot` 冗余列的同步边界** | D-S1-2 说「排班生成后五个冗余值不再变更」，那只覆盖了单次业务操作；**后台修改 `appt_medical_staff.campus_id` / `dept_id`（医生换科室、换院区）时不追溯**已生成的 `appt_slot` 与 `appt_registration` 冗余列——与 `fee` 快照同一原则（保护历史单可倒查）。因此可能出现「该医生已调至 B 院区，但历史号源仍挂在 A」的查询结果，**属预期不是 bug**；S1 生成代码时不得当作数据不一致去修 |
+| **`medical_staff` 删除的引用校验范围** | 上一条「基础数据物理删除」的校验清单只覆盖 `appt_schedule` / `appt_slot` / `appt_registration`。删除 `appt_medical_staff` 前还须额外校验 `appt_staff_favorite.staff_id` 与 `appt_slot_template.staff_id`，否则留下孤儿收藏与孤儿模板 |
 
 ---
 
