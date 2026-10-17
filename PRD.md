@@ -105,9 +105,9 @@
 | `appt_slot_template` | 时段模板 | id, staff_id, period(上午/下午/夜间), start_time, end_time, step_minutes, clinic_type |
 | `appt_fee_standard` | 收费标准 | id, title(职称), clinic_type, fee；唯一键 (title, clinic_type) |
 | `appt_schedule` | 排班 | id, staff_id, dept_id, clinic_type, visit_date, period, status(正常/已停诊)；唯一键 (staff_id, visit_date, period) |
-| `appt_slot` | **号源** | id, schedule_id, **time_point**, fee, status, source(正常/加号), registration_id；唯一键 **(schedule_id, time_point)** |
+| `appt_slot` | **号源** | id, schedule_id, **staff_id / dept_id / campus_id / visit_date / period（冗余，S1 D-S1-2：余量聚合与爽约扫描免 join）**, **time_point（datetime 完整时刻，D-S1-1）**, fee, status, source(正常/加号), registration_id；唯一键 **(schedule_id, time_point)** |
 | `appt_slot_ledger` | 号源台账 | id, slot_id, action(生成/占用/释放/回补/停诊/过期), before_status, after_status, registration_id, create_time |
-| `appt_patient` | 就诊人 | id, user_id, name, id_type(就诊卡/身份证), id_no, is_default, status |
+| `appt_patient` | 就诊人 | id, user_id, name, id_type(就诊卡/身份证), id_no(密文), **id_no_hash(HMAC-SHA256 摘要，D-S1-3)**, is_default, status；唯一键 **(id_type, id_no_hash)** |
 | `appt_registration` | 挂号单 | id, registration_no, user_id, patient_id, slot_id, staff_id, dept_id, campus_id, visit_date, period, time_point, **fee(金额快照)**, **active_flag(1=有效/NULL=终态)**, settle_status, status, sign_time, cancel_type, suspend_batch_no |
 | `appt_payment` | **支付单** | id, **payment_no**, registration_id, amount, channel, status(待支付/已支付/已关闭/已退款), trade_no, expire_time, pay_time；唯一键 payment_no |
 | `appt_refund` | **退款单** | id, refund_no, payment_id, amount, status(待退款/已退款), reason；唯一键 refund_no |
@@ -126,7 +126,7 @@
 4. `SlotTemplate` 不设容量字段，生成数量由 `(end_time - start_time) / step_minutes` 决定。
 5. 唯一键：`appt_schedule(staff_id, visit_date, period)`、`appt_slot(schedule_id, time_point)`、**`appt_registration(slot_id, active_flag)` 联合唯一索引**（active_flag=1 有效挂号、终态置 NULL——MySQL 唯一索引中 NULL 互不冲突，号源回池复用天然成立；一个号最多一笔有效挂号，最终兜底）、`appt_payment(payment_no)`。限购复合规则同法：`UNIQUE(patient_id, dept_id, visit_date, active_flag)`、`UNIQUE(patient_id, time_point, active_flag)`。
 6. 就诊人身份：身份证号全局唯一，就诊卡号院内唯一；同一证件只能归属一个账号。
-7. **PII**：就诊人证件号（`id_no`）属个人敏感信息——演示数据虚构可明文存储，代码预留列加密接口位（AES/GM），生产必须加密存储 + 脱敏展示；日志禁止打印证件号。
+7. **PII**：就诊人证件号（`id_no`）属个人敏感信息——演示数据虚构可明文存储，代码预留列加密接口位（AES/GM），生产必须加密存储 + 脱敏展示；日志禁止打印证件号。**加密与唯一性共存靠 `id_no_hash`**（S1 D-S1-3）：随机 IV 的 AES 密文无法建唯一索引、无法等值查询，故增存 HMAC-SHA256 确定性摘要，**唯一性校验与检索一律走 hash，密文列只用于脱敏展示**——否则约束 6（证件号唯一）与本条（加密存储）互斥。
 
 ---
 
@@ -653,6 +653,6 @@ GET  /appt/admin/dashboard                        数据看板
 | M8 | dates 接口 deptId/staffId 语义未区分 | deptId: hasSchedule + 午别合计；staffId: hasSchedule + 各午别余量（§8） |
 | M9 | 爽约与过期是两个任务、两套窗口 | 合并为同一扫描，过期判定用 `time_point < NOW()`（§9.3） |
 | M10 | 缺任务日志/回调记录/对账结果/停诊批号承载表 | 新增 `appt_job_log` / `appt_payment_callback` / `appt_reconcile_result` / `appt_suspend_record`；registration 增 `active_flag`、`suspend_batch_no`（§4.2） |
-| M11 | 就诊人证件号明文落库 | 预留列加密接口位，生产必须加密 + 脱敏（§4.2 约束 7） |
+| M11 | 就诊人证件号明文落库 | 预留列加密接口位，生产必须加密 + 脱敏（§4.2 约束 7）；S1 补 `id_no_hash`，唯一索引建在 `(id_type, id_no_hash)`，让「证件唯一」与「加密存储」共存（D-S1-3） |
 | M12 | 关单前逐单查渠道 + 两机制并存 | 合并为 30 秒巡检两段式（近过期主动查 + 到期查后关单）（§9.4、§9.5） |
 | M13 | 限购/黑名单统计口径未明确 | 均按 `user_id`（账号级）统计；黑名单表增 user_id（§6.5、§6.9、§4.2） |

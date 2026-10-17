@@ -90,7 +90,7 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 | 类型 | 格式 | 示例 |
 |---|---|---|
 | 就诊日期 `visitDate` | `yyyy-MM-dd` | `2026-10-21` |
-| 时间点 `timePoint` | `HH:mm` | `09:51` |
+| 时间点 `timePoint` | `HH:mm`（**展示线值**；DB 以 `datetime` 存完整时刻，服务端格式化后输出——见 `database-design.md` D-S1-1） | `09:51` |
 | 完整时间戳 | `yyyy-MM-dd HH:mm:ss` 本地时区 | `2026-10-21 09:51:00` |
 | 金额 | JSON number，两位小数 | `22.00` |
 
@@ -116,6 +116,21 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 | 挂号单 settleStatus | `NONE` 无结算 / `WAIT_REFUND` 待退费 / `REFUNDED` 已退费 |
 
 公开查询组（§3）只暴露 `AVAILABLE` 的号源；其余态不出现在公开响应中。
+
+**基础数据枚举线值**（S1 补充，权威定义见 `database-design.md` §2）：
+
+| 实体/字段 | 线值 |
+|---|---|
+| 午别 `period` | `AM` 上午 / `PM` 下午 / `NIGHT` 夜间（数量 2~3 可变，严禁写死两列，PRD §4.2-2） |
+| 门诊类型 `clinicType` | `NORMAL` 普通 / `NIGHT` 夜间延时 / `EXPERT` 知名专家（展示用中文名，见 §3.4） |
+| 职称 `title` | `CHIEF` 主任医师 / `ASSOC_CHIEF` 副主任医师 / `ATTENDING` 主治医师 / `PHYSICIAN` 医师 |
+| 号源来源 `source` | `NORMAL` 正常 / `EXTRA` 加号 |
+| 证件类型 `idType` | `IDCARD` 身份证 / `CARD` 就诊卡 |
+| 号源台账 `action` | `GENERATE` / `OCCUPY` / `RELEASE` / `REFILL` / `SUSPEND` / `EXPIRE` |
+| 取消类型 `cancelType` | `ACTIVE` 主动 / `PASSIVE` 被动 |
+| 排班状态 `schedule.status` | `NORMAL` 正常 / `SUSPENDED` 已停诊 |
+
+> 院区 / 科室 / 医务人员 / 就诊人 / 黑名单的**启停**用 `char(1)`（`'0'` 正常 / `'1'` 停用），不属契约线值，仅后台管理使用，前端不感知。
 
 ---
 

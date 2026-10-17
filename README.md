@@ -15,10 +15,10 @@
 
 | 本地目录 | 远端仓库 | 角色 | 状态 |
 |---|---|---|---|
-| `backend` | `qd-appt-backend` | 后端（RuoYi-Vue-Plus + 模块 `appt`） | 待建仓 |
-| `admin` | `qd-appt-admin` | 管理后台（plus-ui / Vue3） | 待建仓 |
+| `backend` | `qd-appt-backend` | 后端（RuoYi-Vue-Plus + 模块 `appt`） | 已建（框架基线 + 工程基线 + S1 表结构） |
+| `admin` | `qd-appt-admin` | 管理后台（plus-ui / Vue3） | 已建（框架基线 + dev 代理 8082） |
 | `app` | `qd-appt-app` | 移动端（uni-app，患者 + 分诊台双角色） | 待建仓 |
-| `docs` | `qd-appt-docs` | 本目录：项目级文档 | 待建仓 |
+| `docs` | `qd-appt-docs` | 本目录：项目级文档 | 已建 |
 
 一次 Agent 会话原则上只动一个仓库；构建只在各仓库目录内执行，**不在父目录跑 `mvn` / `npm`**（父目录不受 .gitignore 保护，游离产物长期残留）。
 
@@ -30,7 +30,7 @@
 | `技术方案.md` | 六难点实现方案 / 核心不变量 / 对账 / 配置 / 索引（实现视角唯一权威，v0.3） | 已建 |
 | `redlines.md` | 红线全集（建仓时拆分复制进各仓 `AGENTS.md`） | 已建 |
 | `api-contract.md` | API 契约：四层边界、端点条目、16 个业务错误码、权限标识、状态边界矩阵（实现视角，v0.1 已定稿；P1 端点条目占位待切片联调前补） | 已建 |
-| `database-design.md` + `appt_schema.sql` | 库表设计 + 建表 SQL | 待建（S1） |
+| `database-design.md`（本仓）+ `appt_schema.sql`（backend 仓 `script/sql/`） | 库表设计（字段级唯一权威）+ 建表 SQL（20 表已在 `appt` 库验证） | 已建 v0.1（S1） |
 | `architecture.md` | 模块图、请求链路、部署拓扑、拆分预案 | 待建 |
 | `ROADMAP.md` | 切片排期 + 决策记录 | 待建 |
 
