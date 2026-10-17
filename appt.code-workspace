@@ -1,0 +1,30 @@
+{
+  "folders": [
+    { "path": "../backend" },
+    { "path": "../admin" },
+    { "path": "../app" },
+    { "path": "." }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/.git": true,
+      "**/target": true,
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/unpackage": true
+    },
+    "search.exclude": {
+      "**/target": true,
+      "**/node_modules": true,
+      "**/dist": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "vscjava.vscode-java-pack",
+      "vmware.vscode-spring-boot",
+      "Vue.volar",
+      "uni-helper.uni-app-schemas"
+    ]
+  }
+}
