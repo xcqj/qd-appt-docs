@@ -53,6 +53,8 @@
 | 报告查询 / 账单 / 地址管理 / 就诊评价 | 与挂号主线无关 |
 | 多医院（租户化） | 本期为单医院多院区 |
 | 全文检索 | 数据量与查询复杂度未达引入门槛，使用 LIKE |
+| 排班提前可见日历 | 后续迭代（§13.2） |
+| App 端深度打包 | uni-app 基础能力（患者端 + 分诊台模式）在 MVP 交付，深度打包延后 |
 
 ---
 
@@ -124,7 +126,7 @@
 2. **`period`（午别）为枚举**：上午 / 下午 / **夜间**，各自有默认起止时刻（夜间约 17:00 起）。列表聚合时午别数量 2~3 可变，必须动态分组。
 3. **`fee` 落 Slot，并冗余至 Registration**（金额快照，保护历史订单）。
 4. `SlotTemplate` 不设容量字段，生成数量由 `(end_time - start_time) / step_minutes` 决定。
-5. 唯一键：`appt_clinic_type(code)`、`appt_slot_template(staff_id, period, clinic_type)`、`appt_fee_standard(title, clinic_type)`、`appt_staff_favorite(user_id, staff_id)`、`appt_patient(id_type, id_no_hash)`、`appt_schedule(staff_id, visit_date, period)`、`appt_slot(schedule_id, time_point)`、**`appt_registration(slot_id, active_flag)` 联合唯一索引**（active_flag=1 有效挂号、终态置 NULL——MySQL 唯一索引中 NULL 互不冲突，号源回池复用天然成立；一个号最多一笔有效挂号，最终兜底）、`appt_payment(payment_no)`、`appt_refund(refund_no)`。限购复合规则同法：`UNIQUE(patient_id, dept_id, visit_date, active_flag)`、`UNIQUE(patient_id, time_point, active_flag)`。
+5. 唯一键：`appt_clinic_type(code)`、`appt_slot_template(staff_id, period, clinic_type)`、`appt_fee_standard(title, clinic_type)`、`appt_staff_favorite(user_id, staff_id)`、`appt_patient(id_type, id_no_hash)`、`appt_schedule(staff_id, visit_date, period)`、`appt_slot(schedule_id, time_point)`、**`appt_registration(slot_id, active_flag)` 联合唯一索引**（active_flag=1 有效挂号、终态置 NULL——MySQL 唯一索引中 NULL 互不冲突，号源回池复用天然成立；一个号最多一笔有效挂号，最终兜底）、`appt_payment(payment_no)`、`appt_refund(refund_no)`。限购复合规则同法：`UNIQUE(patient_id, dept_id, visit_date, active_flag)`、`UNIQUE(patient_id, time_point, active_flag)`。全量索引以 `database-design.md` §4 索引总表为准。
 6. 就诊人身份：身份证号全局唯一，就诊卡号院内唯一；同一证件只能归属一个账号。
 7. **PII**：就诊人证件号（`id_no`）属个人敏感信息——演示数据虚构可明文存储，代码预留列加密接口位（AES/GM），生产必须加密存储 + 脱敏展示；日志禁止打印证件号。**加密与唯一性共存靠 `id_no_hash`**（S1 D-S1-3）：随机 IV 的 AES 密文无法建唯一索引、无法等值查询，故增存 HMAC-SHA256 确定性摘要，**唯一性校验与检索一律走 hash，密文列只用于脱敏展示**——否则约束 6（证件号唯一）与本条（加密存储）互斥。
 
@@ -499,7 +501,7 @@ GET  /appt/admin/dashboard                        数据看板
 | 一级 | 二级 |
 |---|---|
 | 基础数据 | 院区管理 / 门诊类型 / 科室树 / 医务人员 / 收费标准 / 时段模板 |
-| 排班管理 | 排班列表 / 生成排班（批量 + 预览）/ 停诊登记与处理 / 号源查看与调整 |
+| 排班管理 | 排班列表 / 生成排班（批量 + 预览）/ 停诊登记与处理 / 号源查看与删除 |
 | 预约管理 | 挂号单列表与详情 / 手动退号 / 签到记录 / 加号记录 |
 | **交易管理** | **支付单列表 / 退款单列表 / 渠道配置** |
 | 规则治理 | 黑名单管理 / 限购规则 / 就诊人管理 |
@@ -520,7 +522,7 @@ GET  /appt/admin/dashboard                        数据看板
 | Schedule | ~500 | **稀疏**，约 40% 医务人员每日出诊 → 体现"无排班" |
 | **Slot** | **~9,000** | 每（staff × 日 × 午别）12~20 个号 |
 | Patient / Account | 20 账号 / 35 就诊人 | 覆盖多就诊人切换演示 |
-| Registration | ~2,000 | **必须覆盖全部状态**：待支付 / 已预约 / 已签到 / 已完成 / 已关闭 / 已退号(主动) / 已退号(被动) / 已爽约 |
+| Registration | ~2,000 | **必须覆盖全部状态**：待支付 / 已预约 / 已签到 / 已完成 / 已关闭 / 已退号(主动) / 已退号(被动) / 已爽约。**seed 硬约束**（依据 `database-design.md` §3.3 / §6）：① 终态（已完成 / 已关闭 / 已退号 / 已爽约）行 `active_flag IS NULL`、活跃态（待支付 / 已预约 / 已签到）= 1，否则 `chk_reg_active` 报 3819；② 非默认就诊人 `is_default` 必须存 `NULL` 不可存 0，否则 `uk_patient_user_default` 第二个就诊人即 1062；③ 同一 slot 不可出两条 `active_flag=1` 的单（`uk_reg_slot_active`） |
 | Payment / Refund | ~2,000 / ~300 | 覆盖待支付、已支付、已关闭、已退款 |
 
 **红线**：全部虚构，不使用真实医院、科室、医务人员名称；头像使用占位图。
@@ -557,7 +559,7 @@ GET  /appt/admin/dashboard                        数据看板
 
 ### 13.2 后续迭代（本期不做）
 
-真实支付渠道签约（需企业主体）、候补队列、改约、医保结算、检查与治疗预约、排班提前可见日历、就诊评价、App 端深度打包。
+真实支付渠道签约（需企业主体）、候补队列、改约、医保 / 商保结算、检查与治疗预约、排班提前可见日历、就诊评价、App 端深度打包。
 
 ### 13.3 切片
 
@@ -616,7 +618,7 @@ GET  /appt/admin/dashboard                        数据看板
 | 11 | 通知 | 站内信 |
 | 12 | 副主任医师挂号费 | ¥15.00（v0.5 确认，此前为拟定值） |
 
-### 14.3 待验证项
+### 14.3 待验证项与已知边界
 
 | 项 | 状态 |
 |---|---|

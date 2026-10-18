@@ -47,7 +47,7 @@
 
 ## 2. 枚举线值（补 API 契约 §2.7 未覆盖部分）
 
-契约 §2.7 只定义了 Slot / Registration / Payment / settleStatus 四组线值。以下为本设计新增，**需回写契约 §2.7**：
+契约 §2.7 只定义了 Slot / Registration / Payment / settleStatus 四组线值。以下为本设计新增（**回写契约 §2.7 已于 2026-10-18 完成**，其中 `scope_type` 因 E5 是前端请求线值于同日补入契约 §2.7，见 §7）：
 
 | 实体/字段 | 线值 | 说明 |
 |---|---|---|
@@ -63,6 +63,12 @@
 | 退款单 `status` | `WAIT_REFUND` / `REFUNDED` / `FAILED` | 退避重试耗尽置 `FAILED`，终态；如需再退另建退款单，不在原单回滚 |
 | 回调处理 `process_status` | `PENDING` / `SUCCESS` / `IGNORED` 重复丢弃 / `FAILED` | 回调去重与重放（技术方案 §3.5） |
 | 对账 `status` | `OK` 正常 / `FIXED` 已自动修复 / `ALERT` 待人工 | 后台「运维对账」菜单（技术方案 §3.6） |
+| 医务人员类型 `medical_staff.type` | `DOCTOR` 医生 / `NURSE` 护士 | 一行 = 一个出诊身份（PRD §14.3）；护士亦可在 `fee_standard` 定价（D-S1-6） |
+| 签到方式 `registration.sign_type` | `SCAN` 扫码 / `MANUAL` 手动补签 | 契约 §7.1 E1 / §7.2 E2；仅 `SIGNED` 态有值 |
+| 停诊登记状态 `suspend_record.status` | `PENDING` 待处理 / `HANDLED` 已处理 | 契约 §8.4 列表按此筛选；F2 处理后置 `HANDLED` |
+| 停诊范围 `suspend_record.scope_type` | `SCHEDULE` 单排班 / `STAFF_DATE` 某医生某日 / `CAMPUS_DATE` 院区某日 | D-S1-5；契约 §7.5 E5 请求线值（前端分诊台传入） |
+| 对账动作 `reconcile_result.action` | `AUTO_FIX` 自动修复 / `ALERT` 告警 | 与 `status` 的 `FIXED`/`ALERT` 对应；R4 只告警不自动修 |
+| 支付渠道 `payment.channel` | `MOCK`（本期唯一实现）/ `alipay`（预留） | 真实渠道按适配器接入（PRD D7），业务链路不变 |
 | 退号/退款原因 `reason` | 自由文本 | 不做枚举，避免枚举膨胀 |
 
 **启停类**（不出现在契约中）：`char(1)` `'0'` 正常 / `'1'` 停用——院区、门诊类型、科室、医务人员、**收费标准**、时段模板、就诊人、黑名单（**8 张基础表全部有此列**；`fee_standard` 于 2026-10-18 补，此前遗漏——见 §1 公约 4 与 §6 边界）。
@@ -72,6 +78,8 @@
 ## 3. 表设计
 
 > 字段表说明：`空` 列中 `NOT NULL` 表示必填，空白表示可空。所有表默认带公约 3 的五件套字段（下表不再重复列出），`create_time` 默认 `CURRENT_TIMESTAMP`、`update_time` 默认 `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`。
+>
+> **行数量级**：仅 PRD §11 给出估计的表在各表下方标注；PRD §11 未给估计的表（`staff_favorite` / `fee_standard` / `slot_ledger` / `blacklist` / `notice` / `job_log` / `payment_callback` / `reconcile_result` / `suspend_record`）均为演示量级——事件 / 任务驱动积累，不设估计。
 
 ### 3.1 基础数据域
 
@@ -268,6 +276,8 @@
 - `(user_id, status)`——「同时持有 ≤3」计数 + 黑名单统计（M3/M13）
 - `(status, time_point)`——爽约扫描（技术方案 §3.3）
 
+行数量级 ~2,000（PRD §11；seed 硬约束见该节）。
+
 > 三条联合唯一索引的列**一律 `NOT NULL`**（`active_flag` 除外，它靠 NULL 生效）。`cancel_type`/`sign_time`/`sign_type`/`suspend_batch_no` 可空，不参与唯一键。
 >
 > **`CHECK chk_reg_active`（P0，必须有）**：`status ∈ {WAIT_PAY, BOOKED, SIGNED}` ⇔ `active_flag = 1`；`status ∈ {COMPLETED, CLOSED, CANCELED_ACTIVE, CANCELED_PASSIVE, NOSHOW}` ⇔ `active_flag IS NULL`。
@@ -287,7 +297,7 @@
 | expire_time | datetime | NOT NULL | = 创建时间 + 支付时限 15 分钟（PRD §14.2-3） |
 | pay_time | datetime | | |
 
-索引：**`UNIQUE(payment_no)`**（I5）、`(status, expire_time)`（关单巡检，技术方案 §3.4）、`(registration_id)`。
+索引：**`UNIQUE(payment_no)`**（I5）、`(status, expire_time)`（关单巡检，技术方案 §3.4）、`(registration_id)`。行数量级 ~2,000（PRD §11）。
 
 #### `appt_refund` 退款单
 
@@ -302,7 +312,7 @@
 | reason | varchar(255) | | |
 | refund_time | datetime | | |
 
-索引：**`UNIQUE(refund_no)`**（I5）、`(status, create_time)`（退款重试扫描；`FAILED` 态同样被此索引覆盖）。
+索引：**`UNIQUE(refund_no)`**（I5）、`(status, create_time)`（退款重试扫描；`FAILED` 态同样被此索引覆盖）。行数量级 ~300（PRD §11）。
 
 ### 3.4 账号与运营域
 
@@ -319,7 +329,7 @@
 | **is_default** | tinyint(1) | | **1 = 默认 / NULL = 非默认**（D-S1-8；每人 ≤10 个就诊人，PRD §14.2-9）。**非默认一律存 `NULL`，不可存 `0`**——`UNIQUE(user_id, is_default)` 中 0 与 0 会互相冲突，只有 NULL 互不冲突 |
 | status | char(1) | NOT NULL | |
 
-索引：**`UNIQUE(id_type, id_no_hash)`**（D-S1-3）、**`UNIQUE(user_id, is_default)`**（D-S1-8：一个账号至多一个默认就诊人）、`(user_id, status)`。
+索引：**`UNIQUE(id_type, id_no_hash)`**（D-S1-3）、**`UNIQUE(user_id, is_default)`**（D-S1-8：一个账号至多一个默认就诊人）、`(user_id, status)`。行数量级 35（20 账号 / 35 就诊人，PRD §11）。
 
 > 接口位预留：`IdNoEncryptor`（加解密 + 脱敏）在 `appt/account` 包留空实现，生产替换为 AES/GM；**查询路径一律经 hash**，密文列只用于展示脱敏。
 
@@ -450,7 +460,7 @@
 | blacklist | `(user_id, status)` / `(end_time)` | 限购拦截；到期解冻 |
 | notice | `(user_id, read_flag, create_time)` | 站内信列表 |
 | job_log | `UNIQUE(batch_no)` / `(job_name, start_time)` | I8 不重跑、漏跑可补 |
-| payment_callback | `UNIQUE(payment_no, trade_no, notify_id)` | 回调去重（§3.5） |
+| payment_callback | `UNIQUE(payment_no, trade_no, notify_id)` / `(process_status, create_time)` | 回调去重（§3.5）/ 失败回调重试扫描 |
 | reconcile_result | `(batch_no)` / `(check_type, status, create_time)` | 对账结果查询 |
 | suspend_record | `UNIQUE(batch_no)` / `(scope_type, scope_value)` / **`(status, create_time)`** | I7 停诊幂等；**`(status, create_time)` 供 §8.4 登记列表按待处理筛选** |
 
@@ -494,7 +504,7 @@
 
 ---
 
-## 7. 需回写上游文档的三处
+## 7. 已回写上游文档的记录（2026-10-18 完成）
 
 1. **API 契约 §2.4**：补一句「`timePoint`(`HH:mm`) 为展示线值，DB 以 `datetime` 存储完整时刻」（D-S1-1）。
 2. **PRD §4.2 `appt_slot` 行**：补冗余列 `staff_id`/`dept_id`/`campus_id`/`visit_date`/`period`（D-S1-2）。

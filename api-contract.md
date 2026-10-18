@@ -128,6 +128,7 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 | 证件类型 `idType` | `IDCARD` 身份证 / `CARD` 就诊卡 |
 | 号源台账 `action` | `GENERATE` / `OCCUPY` / `RELEASE` / `REFILL` / `SUSPEND` / `EXPIRE` |
 | 取消类型 `cancelType` | `ACTIVE` 主动 / `PASSIVE` 被动 |
+| 停诊范围 `scopeType` | `SCHEDULE` 单个午别 / `STAFF_DATE` 某医生某日 / `CAMPUS_DATE` 院区某日（E5 请求线值，前端分诊台传入；日期区间停诊按日拆 N 条登记，D-S1-5） |
 | 排班状态 `schedule.status` | `NORMAL` 正常 / `SUSPENDED` 已停诊 |
 | 定时任务 `job.status` | `RUNNING` 执行中 / `SUCCESS` 成功 / `FAIL` 失败 / `SKIPPED` 未抢到锁或本轮任务未结束，**跳过本轮**（红线 13） |
 | 退款单 `refund.status` | `WAIT_REFUND` 待退款 / `REFUNDED` 已退款 / `FAILED` 退款失败（退避重试耗尽后置此态，进人工队列 + 告警，PRD §6.6；对账 R5 复查） |
@@ -995,13 +996,20 @@ POST /appt/admin/suspend/handle
 | GET `/appt/admin/schedule/list` | `appt:schedule:list` | 排班列表，分页；筛选 staffId / date / period / status |
 | GET `/appt/admin/suspend/list` | `appt:suspend:list` | 停诊登记记录，分页；status = 待处理 / 已处理 |
 | GET `/appt/admin/slot/list` | `appt:slot:list` | 号源查看，分页；筛选 scheduleId / status / source；含 registration_id 关联 |
-| DELETE `/appt/admin/slot/{id}` | `appt:slot:remove` | P1：仅无有效挂号的 Slot 可删（§8.1 约束 7） |
+| DELETE `/appt/admin/slot/{id}` | `appt:slot:remove` | P1：仅无有效挂号的 Slot 可删（§8.1 约束 7）；编号归 F7 |
 
 ### 8.5 其余管理端点——P1 占位
 
 - **F3 对账触发** `POST /appt/admin/reconcile/run`：`appt:reconcile:run`；同步执行、60 秒预算，返回 R1–R7 各查异常数摘要；明细走 F22 结果列表。若实测超时改异步，契约预留说明。
 - **F4 数据看板** `GET /appt/admin/dashboard`：`appt:dashboard:query`；今日放号 / 已预约 / 已签到 / 爽约率 / 退号率 / 支付成功率 / 科室 TOP5（PRD §10.2）。
-- **F8–F24**（挂号单列表详情 / 手动退号 / 签到记录 / 加号记录 / 支付单 / 退款单 / 渠道配置 / 黑名单 / 限购规则 / 就诊人 / 对账结果 / 任务日志）：S5–S7 联调前补条目；手动退号复用 B5 服务端逻辑。
+- **F8–F22 编号分配**（字段级条目均在 S5–S7 联调前补；F16 / F22 编号已被 §11 待确认 #8 与 F3 条目引用，**锁定不变**；F15 / F21 / F23–F24 预留）：
+  - F8 挂号单列表 / F9 挂号单详情（数据范围按 `user_id` 服务端强过滤，红线 10）
+  - F10 手动退号（复用 B5 服务端逻辑）
+  - F11 签到记录 / F12 加号记录
+  - F13 支付单列表 / F14 退款单列表
+  - F16 渠道配置（落业务表还是 `sys_config` 见 §11 待确认 #8）
+  - F17 黑名单管理 / F18 限购规则 / F19 就诊人管理 / F20 任务日志
+  - F22 对账结果列表（F3 明细入口）
 - **F25–F30** 六实体基础数据 CRUD：走 §8.1 生成器约定。
 
 ---
@@ -1013,7 +1021,7 @@ POST /appt/admin/suspend/handle
 | 状态边 | API 端点 | 定时任务 | 对账修复 |
 |---|---|---|---|
 | Slot `AVAILABLE→TAKEN` | B1 提交挂号 | — | R2 号源未占用 |
-| Slot `TAKEN→AVAILABLE` | B4 取消 / B5 退号 | 关单巡检（30s） | R1 幽灵占号 |
+| Slot `TAKEN→AVAILABLE` | B4 取消 / B5 退号 / F2 停诊处理（被动退号回池） | 关单巡检（30s） | R1 幽灵占号 |
 | Slot `AVAILABLE→EXPIRED` | — | 爽约/过期扫描（5min） | — |
 | Slot `TAKEN→EXPIRED` | B4 取消 / B5 退号（回池时 `time_point` 已过，红线 9） | 关单巡检（30s）回补时同上判定 | — |
 | Slot `AVAILABLE→SUSPENDED` | F2 停诊处理 | — | R6 停诊漏处理 |
