@@ -135,6 +135,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-19 | **雪花 id 引用修复**：实测手输 id 被 JS 精度压成 `Number.MAX_SAFE_INTEGER`（9007199254740991）→ 引用校验查不到匹配、删除产生孤儿。① 医务人员（院区/科室）与时段模板（医务人员）改下拉，value 用接口返回的字符串 id；② 服务端加引用存在性校验（须存在且状态正常）；③ 清理孤儿 1 条；④ AGENTS §6 记第七坑 | backend + admin 各一提交 |
 | 2026-10-19 | **S1 基础数据 seed**：`appt_s1_seed.sql`（3 门诊类型 / 3 院区 / 40 科室三级树 10+20+10 / 60 医务人员 / 15 收费标准全组合 / 80 时段模板）；固定 id 段可重跑；全部虚构数据、status 正常；执行后引用完整性四项自检全 0、层级分布 10/20/10；待决项 4 改为「基础数据已做，业务数据 seed 归 S7」 | backend + docs 各一提交 |
 | 2026-10-19 | **UI 体验轮**（S1 维护页可用性收口）：20 页筛选区去噪（移除主键/内部 id/排序/简介/学位等，保留合理日期范围）；枚举全改固定 options 下拉（`options.ts` 线值取自 DDL 注释）；关联字段下拉联动（院区/科室/医务人员，`useApptOptions`）；时间日期控件（LocalTime→`el-time-picker`、visitDate→`date-picker`、科室上级→`el-tree-select`）；列表列名 UI 化 + 枚举中文映射 + 状态 tag；菜单 `order_num` 重排为 1..n；`timePoint` 显示改 `HH:mm` | admin + backend + docs 各一提交 |
+| 2026-10-19 | **导出翻译轮**：20 个 VO 共 47 个枚举字段加 `ExcelDictConvert` + `readConverterExp`（Boolean 用 `false=`/`true=`，String 用线值；未命中→空、null→空），表头同步 UI 化；探针反射调用框架 `convertByExp` 验证 26 例（`MOCK=Mock` 为预期非中文）；不引入 sys_dict；副产物：枚举副本增至三处（§2 权威 / options.ts / VO 注解），已在 AGENTS §9 记同步要求 | backend + admin + docs 各一提交 |
 
 ---
 
@@ -183,3 +184,4 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.2.9 | 2026-10-19 | 雪花 id 引用修复（走查发现）：手输 19 位 id 在浏览器被压成 `Number.MAX_SAFE_INTEGER`（9007199254740991），引用校验因此查不到匹配、删除产生孤儿。① 前端：医务人员（院区/科室）、时段模板（医务人员）改 `el-select`，value 直接用接口返回的字符串 id，types 输入侧放宽为 `string \| number`；② 后端：医务人员与时段模板的 `validEntityBeforeSave` 增加引用存在性校验（须存在且状态正常）；③ 清理孤儿医务人员 1 条；④ AGENTS §6 记第七坑（引用字段禁用文本输入雪花 id） |
 | v0.3.0 | 2026-10-19 | S1 基础数据 seed（`appt_s1_seed.sql`）：3 门诊类型 / 3 院区 / 40 科室（三级树 10+20+10，parent 正确挂树）/ 60 医务人员（3 院区轮转、30 叶子科室轮转、5 职称轮转、每 10 人 1 护士）/ 15 收费标准（5 职称 × 3 门诊类型，内嵌 PRD §6.4 的 22/15/6/7 四个已定价位）/ 80 时段模板（NIGHT 门诊走 18:00-21:00）；固定 id 段先删后插可重跑；数据自检：引用完整性 4 项全 0、层级 10/20/10；待决项 4 更新为「基础数据已做、业务数据 seed 归 S7」 |
 | v0.3.1 | 2026-10-19 | UI 体验轮（S1 维护页可用性收口）：① `src/views/appt/options.ts` 统一线值选项（取自 DDL 注释）+ `labelOf/statusText`；`useApptOptions` 统一加载院区/科室/医务人员选项；② 20 页筛选区去噪与枚举下拉、关联联动、时间日期控件、科室父级树选择（顶级节点 0）；③ 列表列名 UI 化、枚举中文映射、状态 `el-tag`；④ 菜单 `order_num` 由全 1 重排 1..n（`appt_s2_menu_order.sql`）；⑤ `timePoint` 列表显示 `HH:mm`（契约 §2.4）。未做：导出枚举翻译（TRUE/FALSE 与线值）、引用下拉过滤停用项 |
+| v0.3.2 | 2026-10-19 | 导出翻译：20 个 VO / 47 个枚举字段加 `@ExcelDictFormat(readConverterExp=...)`（Boolean 走 `false=`/`true=`；未命中返回空、null 返回空），表头同步 UI 化；反射探针调用框架 `convertByExp` 验证 26 例通过（`MOCK=Mock` 预期非中文）；未引入 sys_dict。副作用：枚举副本三处（database-design §2 权威 / options.ts / VO 注解），改枚举需三处同步（AGENTS §9 已记） |
