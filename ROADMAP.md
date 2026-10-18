@@ -127,6 +127,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-18 | 环境就绪：库 `appt`、Redis db1、后端 8082、plus-ui 8081、全链路加密冒烟全绿 | backend `50b75d5`/`1c85bc2`、admin `fb7fcdd` |
 | 2026-10-18 | **P1 修复轮**（实体生成前置复查闭环）：契约 §7.5 scope_type 对齐 `SCHEDULE`/`STAFF_DATE`/`CAMPUS_DATE`（D-S1-5 落地补全）；PRD §6.4 补挂号费矩阵规则、§6.10 粒度同步；`suspend_record` 归属 triage；database-design §5 补 I6 映射；backend AGENTS §6 补三条生成器坑位；`title` 注释补 `ASSOC_CHIEF_NURSE`（DDL + 库同步 ALTER） | docs / backend 各一轮提交 |
 | 2026-10-18 | **P2 清理轮**（12 条，纯文档）：契约 §9.1 补 F2 触发源、§2.7 补 `scope_type`、§8.5 F8–F22 编号分配（F16/F22 锁定）；PRD §1.4/§13.2 清单互覆、§4.2-5 索引指针、§10.2 菜单改「号源查看与删除」、§11 补 seed 硬约束、§14.3 标题；database-design §2 补 6 组枚举、§3 补行数量级、§4 补 payment_callback 索引登记、§7 标题；技术方案 §6.2 索引指针；ROADMAP §4 §9.7 横切补 S2/S7 | docs 单提交 |
+| 2026-10-19 | **S1 实体生成轮**：20 表走 RuoYi 生成器（`appt_s1_gen_config.sql` 配置一次到位，替代逐表编辑）；菜单父节点 SQL + 20 C/120 F 菜单已执行；生成代码落位 backend/appt + admin（140 java + 20 XML + 20 vue + 40 ts）；构建修复：appt pom 补 excel/translation 依赖（此前 `mvn clean compile` 224 错）；包结构定**方案 A**（生成器平坦 + 领域包放手写代码） | backend / docs 各一轮提交 |
 
 ---
 
@@ -167,3 +168,4 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.2.1 | 2026-10-18 | P1 修复（生成实体类前置）：契约 §7.5 停诊 `scope_type` 对齐 `SCHEDULE`/`STAFF_DATE`/`CAMPUS_DATE`（D-S1-5 落地补全，PRD §6.10 同步）；PRD §6.4 补挂号费矩阵规则；技术方案 §1.2 `suspend_record` 归属 triage；database-design §5 补 I6 映射；backend AGENTS §6 补三条生成器坑位；`appt_schema.sql` title 注释补 `ASSOC_CHIEF_NURSE`（DDL + 库同步 ALTER） |
 | v0.2.2 | 2026-10-18 | P2 清理 12 条：契约 §9.1 `TAKEN→AVAILABLE` 补 F2 触发源、§2.7 补 `scope_type` 请求线值、§8.5 F8–F22 编号分配（F16 渠道配置 / F22 对账结果锁定，F15/F21/F23–F24 预留）；PRD §1.4 补两行范围外、§13.2 医保措辞、§4.2-5 与 §10.2 菜单「号源查看与删除」、§11 补 seed 三条硬约束、§14.3 标题改「待验证项与已知边界」；database-design §2 补 6 组次要枚举、§3 补行数量级口径、§4 补 payment_callback 索引登记、§7 标题改「已回写」；技术方案 §6.2 加索引权威指针；ROADMAP §4 §9.7 横切补 S2/S7 |
 | v0.2.3 | 2026-10-19 | 实体生成前置（P2 收尾）：契约 §1.3/§2.4 金额线值由 JSON number 修订为 **JSON 字符串**——生成器实测确认框架全局将 `BigDecimal` 序列化为字符串（`JacksonConfig`，防 JS 精度丢失），原「number」表述与框架行为冲突；`fee_standard.fee` / `slot.fee` / `registration.fee` / `payment.amount` / `refund.amount` 五个字段响应即为字符串，前端按字符串处理 |
+| v0.2.4 | 2026-10-19 | S1 实体生成落地：20 表生成器配置与菜单父节点 SQL（backend `d6e1bd6`）；包结构定**方案 A**——生成器产物落平坦包 `org.dromara.appt.{domain,domain.bo,domain.vo,mapper,service,service.impl,controller}`（与框架 demo 同形态；Mapper 扫描 `org.dromara.**.mapper` 兼容子包但重新生成会覆盖落盘），九包划分享写业务代码（技术方案 §1.2 / AGENTS §2 / §6 同步修订）；appt pom 补 `ruoyi-common-excel` + `ruoyi-common-translation`（生成代码默认带导出能力，此前 Maven 构建 224 错，IDEA 内可编译是增量跳过假象） |
