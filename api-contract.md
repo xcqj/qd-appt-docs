@@ -901,7 +901,7 @@ POST /appt/triage/suspend
 ```json
 {
   "staffId": 301,
-  "scopeType": "DAY",
+  "scopeType": "STAFF_DATE",
   "scopeValue": "2026-10-22",
   "reason": "医生临时会议"
 }
@@ -910,11 +910,11 @@ POST /appt/triage/suspend
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | staffId | 是 | 停诊对象医务人员 |
-| scopeType | 是 | `SCHEDULE` 单个午别 / `DAY` 整天 / `RANGE` 日期区间 |
-| scopeValue | 是 | SCHEDULE → scheduleId；DAY → visitDate；RANGE → `{ startDate, endDate }` |
+| scopeType | 是 | `SCHEDULE` 单个午别 / `STAFF_DATE` 某医生某日 / `CAMPUS_DATE` 院区某日 |
+| scopeValue | 是 | SCHEDULE → scheduleId；STAFF_DATE → visitDate；CAMPUS_DATE → `campusId:date` |
 | reason | 是 | 停诊原因（进站内信通知患者） |
 
-**业务行为：** INSERT `appt_suspend_record`（`batch_no` 预生成，`operator = 当前账号`，`status = 待处理`）→ 返回批号。**本端点只登记、不执行退号**——执行是管理端 F2 的职责（两段式）。
+**业务行为：** INSERT `appt_suspend_record`（`batch_no` 预生成，`operator = 当前账号`，`status = 待处理`）→ 返回批号。**本端点只登记、不执行退号**——执行是管理端 F2 的职责（两段式）。日期区间停诊按日拆分为 N 条 `STAFF_DATE` 登记，共用同一 `batch_no` 幂等归并（D-S1-5）。
 
 **约束：** 同一范围存在未处理的登记时返回已登记批号，不重复建单。
 

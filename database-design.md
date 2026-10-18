@@ -38,7 +38,7 @@
 > 排班生成后这五个值**不再变更**（唯一变更源是停诊，走 `status`）；staff 主数据变更是否追溯另见 §6。→ 已回写 PRD §4.2 `appt_slot` 行 |
 | **D-S1-3** | 就诊人证件号唯一性 | **增 `id_no_hash` 列（HMAC-SHA256 确定性摘要）**，唯一索引建在 `(id_type, id_no_hash)`；`id_no` 存 AES 密文（演示期明文）仅用于脱敏展示。理由：PRD §4.2 约束 6（证件号唯一）与约束 7（生产加密）在随机 IV 加密下**互斥**——密文既不能建唯一索引也不能等值查询。hash 列让两条约束同时成立。→ 需回写 PRD §4.2 约束 7 与技术方案 M11 |
 | **D-S1-4** | 业务单号规则 | **`前缀 + yyyyMMdd + 6 位当日序列`**（如 `R20261018000001`），序列用 Redis `INCR` 每日重置，`varchar(32)`。理由：可读、按日期可排序、演示与排查时肉眼可核对，符合真实医院单号习惯；雪花/UUID 都丢掉了这层信息。代价是一次 Redis 调用，挂号链路本就要访问 Redis（占位 + 余量），可忽略 |
-| **D-S1-5** | 停诊范围的结构化表达 | **`appt_suspend_record` 增 `staff_id` 列**（`SCHEDULE`/`STAFF_DATE` 必填、`CAMPUS_DATE` 可空）；`scope_type` 统一为 `SCHEDULE` / `STAFF_DATE` / `CAMPUS_DATE`（契约 §7.5 的 `DAY`/`RANGE` 一并改）。理由：E5 请求带 `staffId` 而原表无此列，只能把 staffId 拼进 `scope_value` 字符串再反解——F2 要按 staff 定位 schedule，靠字符串解析是脆的；契约 `RANGE` 要求 `scopeValue` 是 `{startDate,endDate}` 对象，塞不进 `varchar(64)`。代价：区间停诊要登记 N 条，换来「同一 `batch_no` 幂等归并」天然可用。**✅ 已于 2026-10-18 落地（appt_schema.sql + 库内重建）** |
+| **D-S1-5** | 停诊范围的结构化表达 | **`appt_suspend_record` 增 `staff_id` 列**（`SCHEDULE`/`STAFF_DATE` 必填、`CAMPUS_DATE` 可空）；`scope_type` 统一为 `SCHEDULE` / `STAFF_DATE` / `CAMPUS_DATE`（契约 §7.5 的 `DAY`/`RANGE` 一并改）。理由：E5 请求带 `staffId` 而原表无此列，只能把 staffId 拼进 `scope_value` 字符串再反解——F2 要按 staff 定位 schedule，靠字符串解析是脆的；契约 `RANGE` 要求 `scopeValue` 是 `{startDate,endDate}` 对象，塞不进 `varchar(64)`。代价：区间停诊要登记 N 条，换来「同一 `batch_no` 幂等归并」天然可用。**✅ 已于 2026-10-18 落地（appt_schema.sql + 库内重建 + 契约 §7.5 同步，PRD §6.10 同步）** |
 | **D-S1-6** | 护士 / 护师的挂号费档位 | **`title` 线值增护师系列**（与既有四个医师系列并列），使 `medical_staff.type = NURSE` 的医务人员也能在 `appt_fee_standard` 上定价。理由：PRD §6.4 有「副主任护师（夜间）¥7.00」，但既有 `title` 只有 `CHIEF`/`ASSOC_CHIEF`/`ATTENDING`/`PHYSICIAN` 四个医师系列——不补则 S2 给护士生成 slot 时取不到 `fee` 档位。**✅ 已于 2026-10-18 同步** |
 | **D-S1-7** | 医生的门诊类型归属 | **`appt_medical_staff` 增 `clinic_type varchar(32)` 列**。理由：契约 §3.4 医生主页要返回 `clinicType`，但门诊类型原本只挂在 `appt_slot_template` / `appt_schedule` 上，一个医生可有多模板多门诊类型，取哪个未定义。PRD §14.3 已定「一行 = 一个出诊身份」，staff 行本身就该带门诊类型，模板只是它的时段配置。**✅ 已于 2026-10-18 落地（appt_schema.sql + 库内重建）** |
 | **D-S1-8** | 默认就诊人的唯一性 | **改造 `appt_patient.is_default`：由 `tinyint(1) NOT NULL DEFAULT 0` 改为可空、`DEFAULT NULL`，语义变为「1 = 默认 / NULL = 非默认」，并在 `(user_id, is_default)` 上建唯一索引**——沿用 M1 的「NULL 互不冲突」手法，让「一个账号最多一个默认就诊人」成为 DB 事实而非应用约定。理由：原设计只有应用层「同事务取消其它默认」，并发下两个请求可同时设成两个默认。**未采纳「新增 `default_flag` 列」方案**——那会引入第二个语义相同的列并要求手工同步两者，多一列 + 一处不一致风险；直接改造 `is_default` 是单列单真相。代价：VO 的 `isDefault` 对非默认就诊人返回 `null` 而非 `false`，前端需按 falsy 处理；批量取消默认要两步（先置 `NULL` 再置 1），不能一次 `UPDATE SET is_default=0`。**✅ 已于 2026-10-18 落地（appt_schema.sql + 库内重建）** |
@@ -465,6 +465,7 @@
 | I3 三张状态机只走合法边 | 状态列 `varchar(16)` 存线值 + 条件 CAS（非 DDL 层，但线值收敛是前提） |
 | I4 限购三条 | 两条联合唯一索引 + `UNIQUE(id_type, id_no_hash)`（就诊人唯一是限购前提） |
 | I5 回调至少处理一次、状态只流转一次 | `UNIQUE(payment_callback(payment_no, trade_no, notify_id))` + `UNIQUE(payment_no)` |
+| I6 号源与资金最终一致（该退的退、该占的占） | `appt_reconcile_result`（七查结果落库：批号/类型/目标/动作/状态）+ `appt_slot_ledger`（修复倒查依据）——非单点 DDL，靠对账任务 + 每条修复 CAS 守卫保证（技术方案 §3.6） |
 | I7 停诊/退款批量不重不放 | `UNIQUE(suspend_record(batch_no))` + `UNIQUE(refund_no)` + `registration.suspend_batch_no` |
 | I8 定时任务不重跑、漏跑可补 | `UNIQUE(job_log(batch_no))` |
 

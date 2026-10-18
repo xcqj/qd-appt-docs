@@ -125,6 +125,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-18 | `api-contract.md` v0.1 定稿 | 契约 §1–§11 |
 | 2026-10-18 | **S1 建表完成**：20 表 + I1 实测 | backend `0f0bfff`、docs `1ec0d0d` |
 | 2026-10-18 | 环境就绪：库 `appt`、Redis db1、后端 8082、plus-ui 8081、全链路加密冒烟全绿 | backend `50b75d5`/`1c85bc2`、admin `fb7fcdd` |
+| 2026-10-18 | **P1 修复轮**（实体生成前置复查闭环）：契约 §7.5 scope_type 对齐 `SCHEDULE`/`STAFF_DATE`/`CAMPUS_DATE`（D-S1-5 落地补全）；PRD §6.4 补挂号费矩阵规则、§6.10 粒度同步；`suspend_record` 归属 triage；database-design §5 补 I6 映射；backend AGENTS §6 补三条生成器坑位；`title` 注释补 `ASSOC_CHIEF_NURSE`（DDL + 库同步 ALTER） | docs / backend 各一轮提交 |
 
 ---
 
@@ -162,3 +163,4 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.1 | 2026-10-18 | 建档：切片总览 + 验收清单 + 第 9 章挂钩 + 待决项 + 工程待办 |
 | v0.2 | 2026-10-18 | 待决项 1/2/3 闭环：定时任务定 **snail-job 2.0.2**；`appt_fee_standard` 补 `status`；契约 §4.6 补就诊人停用过滤；待决项 4 记入「seed 先不生成」 |
 | v0.1.1 | 2026-10-18 | PRD §13.3 切片表删除、改为指向本文件（排期单一权威）；待决项 1 更正事实：框架自带 snail-job 2.0.2，`ry_job.sql` 即其 `sj_*` 建表脚本 |
+| v0.2.1 | 2026-10-18 | P1 修复（生成实体类前置）：契约 §7.5 停诊 `scope_type` 对齐 `SCHEDULE`/`STAFF_DATE`/`CAMPUS_DATE`（D-S1-5 落地补全，PRD §6.10 同步）；PRD §6.4 补挂号费矩阵规则；技术方案 §1.2 `suspend_record` 归属 triage；database-design §5 补 I6 映射；backend AGENTS §6 补三条生成器坑位；`appt_schema.sql` title 注释补 `ASSOC_CHIEF_NURSE`（DDL + 库同步 ALTER） |
