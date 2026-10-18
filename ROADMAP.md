@@ -59,7 +59,7 @@
   1. [x] 物理删除前做引用校验——被 `schedule` / `slot` / `registration` 引用的基础数据拒绝删除并提示先停用（2026-10-19：campus / clinicType / department / medicalStaff 已实现；slot_template、fee_standard 无被引用表）
   2. [ ] 前台下拉（院区 / 科室 / 医生 / 就诊人）一律带 `status='0'`；后台列表不过滤（否则无法恢复）——**依赖前台端点（E 系列），随 S2+ 端点落地**
   3. [x] 唯一键冲突走「命中停用行则重新启用」而非 insert（`uk_clinic_type_code` / `uk_template_staff_period_type` / `uk_fee_title_type` / `uk_patient_id_hash`）——前三者已实现；`uk_patient_id_hash` 待 `IdNoEncryptor`（S6）具备后再接（当前 patient 新增因 `id_no_hash` NOT NULL 尚不可用）
-- [ ] 初始数据脚本（见待决项 4）
+- [x] 初始数据脚本（S1 六表基础数据，2026-10-19 `appt_s1_seed.sql`：3 门诊类型 / 3 院区 / 40 科室三级树 / 60 医务人员 / 15 收费标准 / 80 时段模板；业务数据 seed 随各切片）
 
 ### S2 排班生成与放号
 
@@ -133,6 +133,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-19 | **导出空列修复**：生成器把「注释含全角（」误判为注释内嵌字典——17 个 VO、54 个字段被加上 `ExcelDictConvert` + 假 `readConverterExp`，Excel 导出整列空白；`vo.java.ftl` 移除该分支（只认 `dict_type`），存量 19 个 VO 还原普通 `@ExcelProperty`；AGENTS §6 记第六坑。附：时段模板时间列须填 `HH:mm`（LocalTime，填数字报参数格式错误）；科室 `parent_id` 下拉/树选择为后续手写任务 | backend 单提交 |
 | 2026-10-19 | **S1 收尾轮**：删除前引用校验（campus / clinicType / department / medicalStaff，含 staff_favorite 与下级科室自引用）；唯一键撞停用行「重新启用」+ 同键冲突预检（clinicType / slotTemplate / feeStandard）；`DuplicateKeyException` 全局友好化（1062 由 500 改为 400 提示）；日期/时刻文本框加格式提示（模板 + 存量 4 页）；六页 CRUD + 导出走查全过 | backend + admin + docs 各一提交 |
 | 2026-10-19 | **雪花 id 引用修复**：实测手输 id 被 JS 精度压成 `Number.MAX_SAFE_INTEGER`（9007199254740991）→ 引用校验查不到匹配、删除产生孤儿。① 医务人员（院区/科室）与时段模板（医务人员）改下拉，value 用接口返回的字符串 id；② 服务端加引用存在性校验（须存在且状态正常）；③ 清理孤儿 1 条；④ AGENTS §6 记第七坑 | backend + admin 各一提交 |
+| 2026-10-19 | **S1 基础数据 seed**：`appt_s1_seed.sql`（3 门诊类型 / 3 院区 / 40 科室三级树 10+20+10 / 60 医务人员 / 15 收费标准全组合 / 80 时段模板）；固定 id 段可重跑；全部虚构数据、status 正常；执行后引用完整性四项自检全 0、层级分布 10/20/10；待决项 4 改为「基础数据已做，业务数据 seed 归 S7」 | backend + docs 各一提交 |
 
 ---
 
@@ -143,7 +144,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 1 | ~~定时任务载体~~ | §9.3 §9.4 §9.6 | **已定 2026-10-18：snail-job 2.0.2**（框架自带；保留 Redisson tryLock 防叠加，职责不重叠）。落地步骤：导入 `ry_job.sql` 建 `sj_*` 库 → 启动 `ruoyi-snailjob-server` → 任务类改用 `@JobExecutor`。技术细节见 `技术方案.md` §1.2 / §3.3 |
 | 2 | ~~`appt_fee_standard` 缺 `status`~~ | 与启停类公约不一致 | **已闭环 2026-10-18**：DDL + 库内 ALTER 已加 `status char(1) DEFAULT '0'`；`database-design.md` 启停类清单（8 张表）、字段表、索引总表、已知边界同步 |
 | 3 | ~~就诊人停用过滤未写进契约~~ | 停用就诊人仍可被选中挂号 | **已闭环 2026-10-18**：契约 §4.6 补「仅返回 `status='0'`；后台管理端不加此过滤以便恢复」 |
-| 4 | 初始数据（seed）**何时生成** | S5 性能对比、集成测试、S7 对账都依赖 | **用户 2026-10-18 决定：先不生成**（表结构稳定后另行启动）。归属暂维持 S7；若 S5 提前需要量级数据再议。规模见 PRD §11：~9000 号源 / ~2000 挂号单（覆盖 8 种状态） |
+| 4 | 初始数据（seed）**何时生成** | S5 性能对比、集成测试、S7 对账都依赖 | **已部分闭环 2026-10-19**：S1 六表基础数据 seed 已落地（`appt_s1_seed.sql`，固定 id 段可重跑）；**业务数据 seed**（~500 排班 / ~9000 号源 / ~2000 挂号单覆盖 8 状态）仍归 S7，S5 提前需要量级数据时再议。规模见 PRD §11 |
 | 5 | plus-ui 后台页面**无切片归属** | 排期可能漏 | 本文件 §2 已按里程碑反推补齐，**待确认** |
 | 6 | ~~PRD §13.3 是否改为指针~~ | 双权威漂移 | **已闭环 2026-10-18**：PRD §13.3 已改为指向本文件 |
 | 7 | seed 数据规模与虚构医院名 | PRD §11 红线 | 3 院区 / ~40 科室 / ~60 医务人员 / ~500 排班 / ~9000 号源 / ~2000 挂号单，覆盖 8 种状态 |
@@ -179,3 +180,4 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.2.7 | 2026-10-19 | Excel 导出空列修复：生成器原逻辑「注释含全角（ → 注释内嵌字典」，本库散文体注释（如「主键（雪花）」）被误判，17 个 VO / 54 字段套上 `ExcelDictConvert` + 假 `readConverterExp`，导出时查不到映射输出空；`vo.java.ftl` 移除该分支只认 `dict_type`，存量 19 个 VO 还原为普通 `@ExcelProperty`（编译双绿）。另确认：时段模板 `start_time/end_time` 为 `LocalTime`，须填 `HH:mm`（非缺陷）；科室 `parent_id` 下拉选择属后续手写任务 |
 | v0.2.8 | 2026-10-19 | S1 收尾（AGENTS §6 第二条/第三条落地）：① 删除前引用校验——campus（医务人员/排班/号源/挂号）、clinicType（按 code：医务人员/时段模板/收费标准/排班）、department（医务人员/排班/号源/挂号 + 下级科室自引用）、medicalStaff（排班/号源/挂号/收藏/时段模板）；slot_template、fee_standard 无被引用表；`appt_staff_favorite` 恢复实体+Vo+Mapper 仅作校验用（不恢复端点）；② 唯一键「撞停用行重新启用」+ 同键冲突预检（clinicType / slotTemplate / feeStandard），`DuplicateKeyException` 全局友好化（1062 由 500 改为 400）；③ `uk_patient_id_hash` 待 `IdNoEncryptor`（S6）；④ 日期/时刻文本框格式提示（生成器模板 + 存量 4 页）；S1 清单 4/6 项打勾 |
 | v0.2.9 | 2026-10-19 | 雪花 id 引用修复（走查发现）：手输 19 位 id 在浏览器被压成 `Number.MAX_SAFE_INTEGER`（9007199254740991），引用校验因此查不到匹配、删除产生孤儿。① 前端：医务人员（院区/科室）、时段模板（医务人员）改 `el-select`，value 直接用接口返回的字符串 id，types 输入侧放宽为 `string \| number`；② 后端：医务人员与时段模板的 `validEntityBeforeSave` 增加引用存在性校验（须存在且状态正常）；③ 清理孤儿医务人员 1 条；④ AGENTS §6 记第七坑（引用字段禁用文本输入雪花 id） |
+| v0.3.0 | 2026-10-19 | S1 基础数据 seed（`appt_s1_seed.sql`）：3 门诊类型 / 3 院区 / 40 科室（三级树 10+20+10，parent 正确挂树）/ 60 医务人员（3 院区轮转、30 叶子科室轮转、5 职称轮转、每 10 人 1 护士）/ 15 收费标准（5 职称 × 3 门诊类型，内嵌 PRD §6.4 的 22/15/6/7 四个已定价位）/ 80 时段模板（NIGHT 门诊走 18:00-21:00）；固定 id 段先删后插可重跑；数据自检：引用完整性 4 项全 0、层级 10/20/10；待决项 4 更新为「基础数据已做、业务数据 seed 归 S7」 |
