@@ -48,7 +48,7 @@
 
 ## 3. 逐切片验收清单
 
-### S1 数据建模与基础数据（进行中）
+### S1 数据建模与基础数据（已完成 2026-10-19）
 
 - [x] `database-design.md` v0.1（20 表字段级设计 + 索引总表 + 不变量映射）
 - [x] `appt_schema.sql` 20 表在 `appt` 库建成（2026-10-18，backend `0f0bfff`）
@@ -58,11 +58,12 @@
 - [ ] **三条实现约束落地**（不设 `del_flag` 的还债，缺一即出 bug）：
   1. [x] 物理删除前做引用校验——被 `schedule` / `slot` / `registration` 引用的基础数据拒绝删除并提示先停用（2026-10-19：campus / clinicType / department / medicalStaff 已实现；slot_template、fee_standard 无被引用表）
   2. [ ] 前台下拉（院区 / 科室 / 医生 / 就诊人）一律带 `status='0'`；后台列表不过滤（否则无法恢复）——**依赖前台端点（E 系列），随 S2+ 端点落地**
-  3. [x] 唯一键冲突走「命中停用行则重新启用」而非 insert（`uk_clinic_type_code` / `uk_template_staff_period_type` / `uk_fee_title_type` / `uk_patient_id_hash`）——前三者已实现；`uk_patient_id_hash` 待 `IdNoEncryptor`（S6）具备后再接（当前 patient 新增因 `id_no_hash` NOT NULL 尚不可用）
+  3. [x] 唯一键冲突走「命中停用行则重新启用」而非 insert（`uk_clinic_type_code` / `uk_template_staff_period_type` / `uk_fee_title_type` / `uk_patient_id_hash`）——**四条全部实现**（`uk_patient_id_hash` 于 2026-10-19 随 `IdNoEncryptor` 接入：新增时算 HMAC-SHA256 摘要，撞停用行复用原 id 并重启）
 - [x] 初始数据脚本（S1 六表基础数据，2026-10-19 `appt_s1_seed.sql`：3 门诊类型 / 3 院区 / 40 科室三级树 / 60 医务人员 / 15 收费标准 / 80 时段模板；业务数据 seed 随各切片）
 
 ### S2 排班生成与放号
 
+- [x] 前置（2026-10-19）：`slot` 删除校验有效挂号（契约 §8.1-7）、`slot_template` 删除校验已生成排班（§8.1-5）
 - [ ] 模板 → 批量生成 slot，`UNIQUE(schedule_id, time_point)` 防重，并发撞键重算重试
 - [ ] 放号按 D1：可约 `[今日+1, 今日+7]`，每日 08:00 放第 7 天，策略可配
 - [ ] 停诊前置能力（批量流转本体在 S6）
@@ -137,6 +138,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-19 | **UI 体验轮**（S1 维护页可用性收口）：20 页筛选区去噪（移除主键/内部 id/排序/简介/学位等，保留合理日期范围）；枚举全改固定 options 下拉（`options.ts` 线值取自 DDL 注释）；关联字段下拉联动（院区/科室/医务人员，`useApptOptions`）；时间日期控件（LocalTime→`el-time-picker`、visitDate→`date-picker`、科室上级→`el-tree-select`）；列表列名 UI 化 + 枚举中文映射 + 状态 tag；菜单 `order_num` 重排为 1..n；`timePoint` 显示改 `HH:mm` | admin + backend + docs 各一提交 |
 | 2026-10-19 | **导出翻译轮**：20 个 VO 共 47 个枚举字段加 `ExcelDictConvert` + `readConverterExp`（Boolean 用 `false=`/`true=`，String 用线值；未命中→空、null→空），表头同步 UI 化；探针反射调用框架 `convertByExp` 验证 26 例（`MOCK=Mock` 为预期非中文）；不引入 sys_dict；副产物：枚举副本增至三处（§2 权威 / options.ts / VO 注解），已在 AGENTS §9 记同步要求 | backend + admin + docs 各一提交 |
 | 2026-10-19 | **下拉收尾**：引用下拉统一过滤停用项（`useApptOptions` 过滤 `status===true`，staff/slotTemplate 改用 composable 去重）；科室父级树保留停用节点并标记 `disabled`；黑名单表单的账号/就诊人由 id 输入改为下拉（用户列表 / 就诊人列表） | admin 提交 |
+| 2026-10-19 | **S2 前置收尾**：`slot` 删除增「有有效挂号则拒绝」（契约 §8.1-7 / PRD §6.2）；`slot_template` 删除增「已生成排班则拒绝」（§8.1-5，按 staff_id+period+clinic_type 判定）；ROADMAP 状态修正（S1 完成、`uk_patient_id_hash` 已接 `IdNoEncryptor`） | backend + docs 各一提交 |
 | 2026-10-19 | **图片字段 ossId 翻译修复**：实测 `image-upload` 回填的是 **ossId** 而非 URL（库里存成 `2111926308599402498`，列表把纯数字当相对地址 → 图片裂开）；按框架约定给 `ApptMedicalStaffVo` 加 `avatarUrl`、`ApptCampusVo` 加 `coverImageUrl`（`@Translation(OSS_ID_TO_URL)`），列表绑 `xxxUrl || xxx` 兜底历史 URL 数据；导出移除图片列（翻译只在 JSON 序列化生效）；实测 MinIO 匿名 GET 返回 200（此前 400 是我 curl 拼错前缀） | backend + admin + docs 各一提交 |
 | 2026-10-19 | **枚举三处副本对账**：新增 `backend/script/enum_sync_audit.py`（options.ts ↔ VO 注解 ↔ §2/契约 §2.7/技术方案 §3.6）——首跑抓出 8 处不一致：`PAY_CHANNEL` 缺 `alipay`、`CHECK_TYPE` 标签带 R 编号差异、`level/isDefault/signFlag/activeFlag` 无 UI 映射、`staffFavoriteVo` 残留假注解 `s=ys_user`；**并发现 R6/R7 中文名错位**（应为停诊漏处理 / 余量缓存漂移）——已全部修正，复跑「全部一致」 | backend + admin + docs 各一提交 |
 | 2026-10-19 | **就诊人证件号加密器**：`IdNoEncryptor`（HMAC-SHA256 摘要 + 可选 AES，`appt.security.id-no.*`）落地 D-S1-3/M11；`ApptPatientServiceImpl` 新增/修改计算 `id_no_hash`、`uk_patient_id_hash` 撞停用行重新启用；VO 不返回证件号（红线 15）→ 编辑留空即不修改；就诊人页账号改下拉；摘要与 Python 独立计算比对一致（`a222…3a9c`） | backend + admin + docs 各一提交 |
@@ -199,3 +201,4 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.7 | 2026-10-19 | 就诊人证件号加密器：`IdNoEncryptor`（HMAC-SHA256 摘要 / 可选 AES / 演示期明文）落地 D-S1-3 与 M11；Service 层新增必填校验 + 摘要计算 + `uk_patient_id_hash` 撞停用行重新启用；因 VO 不返回证件号（红线 15），约定「编辑留空 = 不修改」；就诊人页账号字段改用户下拉；摘要与 Python 独立实现交叉验证一致 |
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
 | v0.3.9 | 2026-10-19 | 图片字段 ossId 翻译：`image-upload` 回填 ossId（非 URL），VO 增 `avatarUrl` / `coverImageUrl` 并用 `@Translation(OSS_ID_TO_URL)` 翻译；列表 `xxxUrl || xxx` 兜底旧 URL 数据；导出不含图片列；AGENTS 前后端同步纠正"字段存 URL"的错误表述 |
+| v0.4.0 | 2026-10-19 | S2 前置收尾：`ApptSlotServiceImpl` 删除前校验有效挂号（`active_flag=1`），`ApptSlotTemplateServiceImpl` 删除前按 `(staff_id, period, clinic_type)` 校验是否已生成排班；ROADMAP S1 标记完成、`uk_patient_id_hash` 状态更正（随 `IdNoEncryptor` 已实现） |
