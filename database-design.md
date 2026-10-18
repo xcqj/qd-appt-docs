@@ -64,6 +64,7 @@
 | 回调处理 `process_status` | `PENDING` / `SUCCESS` / `IGNORED` 重复丢弃 / `FAILED` | 回调去重与重放（技术方案 §3.5） |
 | 对账 `status` | `OK` 正常 / `FIXED` 已自动修复 / `ALERT` 待人工 | 后台「运维对账」菜单（技术方案 §3.6） |
 | 医务人员类型 `medical_staff.type` | `DOCTOR` 医生 / `NURSE` 护士 | 一行 = 一个出诊身份（PRD §14.3）；护士亦可在 `fee_standard` 定价（D-S1-6） |
+| 站内信场景 `notice.type` | `BOOK_SUCCESS` 挂号成功 / `PAY_SUCCESS` 支付成功 / `PAY_TIMEOUT` 支付超时关单 / `CANCEL_SUCCESS` 退号成功 / `SUSPEND_CANCEL` 停诊取消 / `NOSHOW_RECORD` 爽约记录 / `BLACKLIST_HIT` 黑名单生效 | PRD §6.12 的 7 个场景（2026-10-19 定义线值）。按**事件**命名而非状态，避免与 `registration.status` / `payment.status` 同名不同义。退款成功通知 PRD §6.12 未列，本期不做；后续若要加，补 `REFUND_SUCCESS` |
 | 签到方式 `registration.sign_type` | `SCAN` 扫码 / `MANUAL` 手动补签 | 契约 §7.1 E1 / §7.2 E2；仅 `SIGNED` 态有值 |
 | 停诊登记状态 `suspend_record.status` | `PENDING` 待处理 / `HANDLED` 已处理 | 契约 §8.4 列表按此筛选；F2 处理后置 `HANDLED` |
 | 停诊范围 `suspend_record.scope_type` | `SCHEDULE` 单排班 / `STAFF_DATE` 某医生某日 / `CAMPUS_DATE` 院区某日 | D-S1-5；契约 §7.5 E5 请求线值（前端分诊台传入） |
