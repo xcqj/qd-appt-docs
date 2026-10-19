@@ -7,7 +7,7 @@
 > **协作约定（2026-10-19）**：每个 S/E 切片由用户**显式开启**才进入开发；切片收尾后必须停止，**不自动进入下一片**。开场卡/收尾协议见 `AGENTS.md`（项目级）。
 
 - 项目：号源 QueueDepth（代码缩写 `appt`），四仓：`qd-appt-{backend,admin,app,docs}`
-- 建档：2026-10-18 ｜ 状态：v0.1
+- 建档：2026-10-18 ｜ 状态：v0.4.2（2026-10-20，S1–S4 已完成）
 
 ---
 
@@ -33,18 +33,18 @@
 |---|---|---|---|---|---|---|
 | **S1** | 数据建模 + 建表 + 基础数据维护（院区 / 门诊类型 / 科室树 / 医务人员 / 收费标准 / 时段模板） | 后台可维护基础数据 | docs / backend / admin | plus-ui：六实体维护页 | — | **已完成 2026-10-19** |
 | **S2** | 排班生成（`SlotTemplate` → 批量生成 `time_point`）+ 放号任务（**停诊登记移至 S6b**） | 能按时刻生成并开放号源 | docs / backend / admin | plus-ui：排班生成页 | ④ | **已完成 2026-10-20** |
-| **S3** | 挂号链路 + 并发三道防线 + 限购与冲突校验 | 高并发争抢正确性达标 | docs / backend（admin 只读页） | uni-app（**延后**） | ① | 未开始 |
-| **S4** | **支付链路**：支付单 + 渠道抽象 + 模拟渠道 + 回调幂等 + 超时关单与回补 | 交易链路闭环 | docs / backend | uni-app（**延后**） | ②③ | 未开始 |
+| **S3** | 挂号链路 + 并发三道防线 + 限购与冲突校验 | 高并发争抢正确性达标 | docs / backend（admin 只读页） | uni-app（**延后**） | ① | **已完成 2026-10-20** |
+| **S4** | **支付链路**：支付单 + 渠道抽象 + 模拟渠道 + 回调幂等 + 超时关单与回补 | 交易链路闭环 | docs / backend | uni-app（**延后**） | ②③ | **已完成 2026-10-20** |
 | **S5** | 排班/医生查询接口 + 午别余量批量聚合 + 缓存 | 性能对比可演示 | docs / backend / admin | plus-ui：排班页余量 | ⑤ | 未开始 |
 | **S6a** | 退号与退款、签到（分诊端扫码）、爽约扫描 | 状态机闭环（除停诊） | docs / backend / admin | uni-app（**延后**） | ⑥ | 未开始 |
 | **S6b** | 停诊批量流转、黑名单、分诊台模式 | 批量操作不重不放 | docs / backend / admin | uni-app（**延后**） | — | 未开始 |
 | **S7** | 对账（号源 + 支付）+ 台账 + 看板 + 业务数据 seed | **可交付**（= 本期结束） | docs / backend / admin | plus-ui：看板与对账页 | — | 未开始 |
 
 **集成测试**（定义见 PRD §12，此处绑定切片）：
-- ① 50 并发争抢同一时间点，恰好 1 笔成功 —— S3
-- ② 超时关单 → 号源回补 → 可被再次预约 —— S4
-- ③ 支付回调重复 3 次仅入账 1 次 —— S4
-- ④ 同一医生/同一天重复执行排班生成，第二次新增 0 条（幂等）—— S2
+- ① 50 并发争抢同一时间点，恰好 1 笔成功 —— S3（**2026-10-20 通过**：1 成交 / 49 `SLOT_GONE`）
+- ② 超时关单 → 号源回补 → 可被再次预约 —— S4（**2026-10-20 通过**）
+- ③ 支付回调重复 3 次仅入账 1 次 —— S4（**2026-10-20 通过**：回调记录 1 条、入账 1 条）
+- ④ 同一医生/同一天重复执行排班生成，第二次新增 0 条（幂等）—— S2（**2026-10-20 通过**：80/2820 → 0/0/2820）
 - ⑤ 余量缓存写入后与 DB 聚合差值在读路径/TTL 内收敛为 0 —— S5
 - ⑥ 爽约扫描某一轮被跳过，下一轮全量兜底不漏判 —— S6a
 
@@ -131,7 +131,7 @@
 | 单号规则（前缀 + 日期 + Redis INCR） | S3 | 并发 50 单号不重复、跨日重置 | 代码完成 2026-10-20（R/P 前缀 + `SequenceUtils` 每日重置；并发 50 未出现重号） |
 | `Idempotency-Key`（仅 B1） | S3 | 同 key 双击只产生一笔待支付 | ✅ 2026-10-20 实测（第二次 `data.duplicate=true`，DB 仍 1 单） |
 | 限购三条 + 账号行 `SELECT ... FOR UPDATE` | S3 | 同账号并发 3 单仅 1 笔成功 | ✅ 2026-10-20 实测（三条各命中：DEPT_DAY / TIME_CONFLICT / HOLD_MAX） |
-| SnailJob + Redisson `tryLock` 防叠加 | S2 / S4 / S6a | 双实例同时触发，任务只执行一次 | 未开始 |
+| SnailJob + Redisson `tryLock` 防叠加 | S2 / S4 / S6a | 双实例同时触发，任务只执行一次 | S2 放号、S4 关单已落地 2026-10-20（`tryLock(0,-1)` 拿不到即记 SKIPPED）；S6a 爽约扫描沿用 |
 
 ---
 
@@ -240,6 +240,9 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.6 | 2026-10-19 | 图片上传接入：OSS 配置入库 `sys_oss_config`（`minio` / `status='Y'` / `access_policy=2` 公有只读 / bucket `appt` / prefix `appt/`），复用项目一 MinIO；`medical_staff.avatar`、`campus.cover_url` 改 `imageUpload` 控件（表单 `image-upload`、列表 `image-preview`），gen 配置两列同步（`appt_s2_oss_config.sql` 尾部固化的 UPDATE 防回退）；字段仍存 URL 字符串，契约 §2.6 语义不变 |
 | v0.3.7 | 2026-10-19 | 就诊人证件号加密器：`IdNoEncryptor`（HMAC-SHA256 摘要 / 可选 AES / 演示期明文）落地 D-S1-3 与 M11；Service 层新增必填校验 + 摘要计算 + `uk_patient_id_hash` 撞停用行重新启用；因 VO 不返回证件号（红线 15），约定「编辑留空 = 不修改」；就诊人页账号字段改用户下拉；摘要与 Python 独立实现交叉验证一致 |
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
+| v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
+| v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
+| v0.4.2 | 2026-10-20 | **S4 文档 + 文档对账**：契约 §5.1 补待签串/ack 结构/入账前置、§5.5 订正 `refund_no` 前缀为 F 与退款回调复用 `appt_payment_callback` 的字段映射；ROADMAP S4 完成与 ①②③④ 通过标记；技术方案 §1.4 补 `payment.refund.auto-enabled`/`max-retry`/`retry-backoff-seconds` 并去除重复行、§3.1/§3.3/§3.4/§3.5 验证数据回填；database-design §3.5 补退款回调复用说明；backend AGENTS §6 补三条坑位（JDT 与 javac 对非法字符差异 / MP 批量插入不参与外层事务 / `@Async` 默认无界执行器） |
 | v0.3.9 | 2026-10-19 | 图片字段 ossId 翻译：`image-upload` 回填 ossId（非 URL），VO 增 `avatarUrl` / `coverImageUrl` 并用 `@Translation(OSS_ID_TO_URL)` 翻译；列表 `xxxUrl || xxx` 兜底旧 URL 数据；导出不含图片列；AGENTS 前后端同步纠正"字段存 URL"的错误表述 |
 | v0.4.0 | 2026-10-19 | S2 前置收尾：`ApptSlotServiceImpl` 删除前校验有效挂号（`active_flag=1`），`ApptSlotTemplateServiceImpl` 删除前按 `(staff_id, period, clinic_type)` 校验是否已生成排班；ROADMAP S1 标记完成、`uk_patient_id_hash` 状态更正（随 `IdNoEncryptor` 已实现） |
 | v0.4.1 | 2026-10-19 | S1 数据完整性补强（S2 前置）：① 模板时间/步长校验（`end > start`、`step > 0` 且 `≤ 时长`，防生成死循环）；② `clinic_type` 引用存在性（staff / fee_standard / slot_template 三处）；③ 科室 `parent_id` 防自指/防成环 + `level` 由父级推导；④ 门诊类型 `code` 被引用禁改；⑤ 存量自查：模板/科室 0 异常，清理 1 条测试医务人员 |

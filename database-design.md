@@ -397,6 +397,8 @@
 索引：**`UNIQUE(payment_no, trade_no, notify_id)`**（回调去重，技术方案 §6.2）、`(process_status, create_time)`。
 
 > 三条唯一列中 `trade_no`/`notify_id` 可空——MySQL 唯一索引中 NULL 互不冲突，**Mock 渠道无 notify_id 时会失去去重能力**。补偿：Mock 渠道回调必带 `trade_no` 且同一单的 `trade_no` 恒定（真实渠道亦如此），去重实际落在 `(payment_no, trade_no)` 上；对账 R3 兜底重复入账。
+>
+> **退款回调复用本表（2026-10-20，S4 定）**：本期不新增 `refund_callback` 表，退款回调（C5）同样落本表，字段映射为 `payment_no` = 关联支付单号、`trade_no` = **退款单号**、`notify_id` = `REFUND-{refundNo}`（退款报文无 notifyId，用退款单号派生稳定值，保证三列唯一键对退款回调同样生效）。
 
 #### `appt_reconcile_result` 对账结果
 
