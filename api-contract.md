@@ -54,6 +54,8 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 
 成功 / 失败的响应 envelope 遵循当前 RuoYi-Vue-Plus 项目惯例（`R<T>`）。本文只约定业务字段与语义，不规定包装类型与异常类。
 
+> **业务码位置（2026-10-20 补，S3）**：框架 `R.code` 是 `int`，装不下 §2.2 的字符串业务码。因此业务失败统一返回 `code = 400`（传输层）、`msg = 中文文案`，**业务码放在 `data.bizCode`**（如 `{"bizCode":"SLOT_GONE"}`）。前端按 `data.bizCode` 分支渲染，不要解析 `msg`。
+
 ### 2.2 业务错误码（P0 最小集）
 
 业务失败返回的 `code` 使用下表业务码；`message` 由前端按码渲染对应文案。传输层通用码（401 / 403 / 参数校验 / 500）遵循框架惯例，不列入本表（见 §11）。
@@ -431,6 +433,14 @@ timePoint
 - 金额只认 `slot.fee` 快照；请求体携带金额一律忽略。
 - Redis 不可用 → 跳过 ①，降级为纯 DB CAS（正确性不降，PRD §9.7）。
 - ⑤~⑦ 任一步失败 → 整体回滚 + Lua 比对 value 后删除占位 key（TTL 兜底）。
+
+**实现口径（2026-10-20，S3）**
+
+- **幂等命中不发 `DUPLICATE_SUBMIT` 错误码**：响应仍是 `code=200`，`data.duplicate=true` 表示回放首次结果（前端据此提示「已提交过」而不报错）。`DUPLICATE_SUBMIT` 只用于「同键请求正在处理中、暂无结果」的并发场景。
+- **限购判定顺序**：账号行锁内先查持有数（`LIMIT_HOLD_MAX`），再查同科室同日（`LIMIT_DEPT_DAY`），最后查同时间点（`LIMIT_TIME_CONFLICT`）；三条复合唯一索引仍保留，撞键时按索引名映射同一组错误码。
+- **账号行锁**：`SELECT user_id FROM sys_user WHERE user_id = ? FOR UPDATE`（单行、不 JOIN），使同一账号的并发挂号串行化。
+- **占位 TTL** = `payment.expire-minutes`（默认 15 分钟），与支付截止时间等长；成功后 key 保留至 TTL 自然过期，关闭/退号路径的主动释放归 S4/S6a。
+- **支付单**：本切片只落 `payment(WAIT_PAY)`，`expire_time = now + payment.expire-minutes`；支付动作与回调归 S4。
 
 ### 4.2 我的预约列表（B2）
 
