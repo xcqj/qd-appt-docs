@@ -82,12 +82,12 @@
 - [x] 降级对照实验 —— 2026-10-20：`--appt.slot-hold.enabled=false` 摘除防线① 后重跑，仍 `PASS=14 FAIL=0`（1 成交 / 49 由 DB CAS 拒绝，无占位键），证据见 `test-evidence.md` §3
 - [ ] 患者端主链路页面（uni-app，**整体延后**）
 
-### S4 支付链路
+### S4 支付链路（已完成 2026-10-20）
 
-- [ ] `PaymentChannel` 接口 + `MockPaymentChannel`
-- [ ] 回调：验签 → append-only 落库 → 立即 ack → 异步入账；「钱到了号没了」分支
-- [ ] 超时关单与号源回补（30 秒巡检两段式）
-- [ ] 集成测试②③
+- [x] `PaymentChannel` 接口 + `MockPaymentChannel` —— 2026-10-20：create/query/close/refund 四方法，tradeNo 由支付单号确定性派生（保证回调去重键非空稳定）
+- [x] 回调：验签 → append-only 落库 → 立即 ack → 异步入账；「钱到了号没了」分支 —— 2026-10-20：C1/C5 共用 `PaymentCallbackDispatcher`，入账走有界线程池 + 新事务；关单后回调 → 自动建退款单 → 退款回调 CAS 置 `REFUNDED`
+- [x] 超时关单与号源回补（30 秒巡检两段式）—— 2026-10-20：`apptPaymentCloseJob`（近过期查单 + 到期关单）+ 三步 CAS + `RELEASE` 台账 + 释放占位；C2 `TIMEOUT` 复用同一关单服务
+- [x] 集成测试②③ —— 2026-10-20 实测 `PASS=20 FAIL=0 SKIP=0`（回调 3 次仅 1 次入账、关单回补后可再约、关单后回调走退款、并发 5 次关单仅 1 次生效、篡改签名被拒）
 
 ### S5 查询聚合与缓存
 
@@ -121,11 +121,11 @@
 |---|---|---|---|
 | `active_flag` NULL 语义 + `UNIQUE(slot_id, active_flag)` | S1（建）/ S3（用） | I1 实测：终态单共存、第二笔有效单报 1062 | ✅ |
 | 三道防线防超卖（Redis → DB CAS → 唯一索引） | S3 | 50 并发：1 成功 + 49 返回 1062/已被预约，`registration` 仅 1 行 `active_flag=1` | ✅ 2026-10-20 实测（1 成交 / 49 SLOT_GONE，`active_flag=1` 仅 1 行，payment 1 笔；**摘除防线① 对照组同样 1 成交**） |
-| 条件 CAS 即幂等 | S3 / S4 / S6a | 重复请求第二次 `affected rows = 0` | S3 号源 CAS 已落地 2026-10-20；退号/回调/签到/停诊待后续切片 |
+| 条件 CAS 即幂等 | S3 / S4 / S6a | 重复请求第二次 `affected rows = 0` | S3 号源 CAS + S4 支付/退款/关单 CAS 已落地 2026-10-20；退号/签到/停诊待后续切片 |
 | 停诊两段式 + 批号幂等 | S6b（登记 + 处理） | 同一批号二次执行全部影响 0 行；登记按日拆分共用批号 | 未开始（登记 2026-10-19 由 S2 移入） |
 | 放号滚动窗口 D1（可配） | S2（任务侧）/ S5（查询侧） | 窗口外不可约；08:00 任务只生成「今日+N」 | ✅ 任务侧 2026-10-20 验收（只生成目标日、重跑 0 新增）；查询侧过滤归 S5 |
 | 余量聚合 M×2 → 1 + Lua EXISTS 守卫 | S5 | 单屏 1 次聚合 SQL + 压测对比表 | 未开始 |
-| 回调幂等 + 「钱到了号没了」 | S4 | 回调 3 次仅 1 次入账；关单后回调 → 自动退款 + 告警 | 未开始 |
+| 回调幂等 + 「钱到了号没了」 | S4 | 回调 3 次仅 1 次入账；关单后回调 → 自动退款 + 告警 | ✅ 2026-10-20 实测（3 次投递回调记录仅 1 条、payment 仅 1 次 PAID；关单后回调 → refund REFUNDED、payment 保持 CLOSED） |
 | 对账七查 + 保守修复 | S7 | R1 幽灵占号自动回池；R4 只告警不自动修 | 未开始 |
 | 爽约半开窗口 + 全量兜底 | S6a | 跳过一轮后下一轮补判，漏判 0 | 未开始 |
 | 单号规则（前缀 + 日期 + Redis INCR） | S3 | 并发 50 单号不重复、跨日重置 | 代码完成 2026-10-20（R/P 前缀 + `SequenceUtils` 每日重置；并发 50 未出现重号） |
@@ -184,6 +184,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-19 | **S2 开发轮（排班生成与放号）**：`SlotGenerateService` 两阶段（plan 只读 → apply 按 (staff, 日期) 一事务）；模板仲裁为「优先 `staff.clinic_type`，否则 id 最小」；fee 按 (职称, 门诊类型) 预加载、缺档位直接报错；`slot_ledger(GENERATE)` 与新增号源 1:1；F1 两端点 `POST /appt/admin/schedule/generate` + `GET /appt/admin/schedule/preview`（`appt:schedule:add`）；`apptReleaseJob` 执行器 + Redisson tryLock + `appt_job_log` 留痕 + 启动补偿；admin 排班页「生成排班」对话框（预览 / 生成 / 全体有模板人员）+ 菜单脚本 `appt_s2_menu_generate.sql`；停诊登记经确认整体移至 S6b | backend + admin + docs 各一提交 |
 | 2026-10-20 | **S2 验收与体验收口**：控制台「执行一次」连跑两次均 SUCCESS（首轮 80 排班 / 2820 号源，重跑 0 / 0 / 跳过 2820，集成测试④达成）；启动补偿加 `booking.release.compensate-after-time`（默认 08:00，防 08:00 前重启提前放号）；排班 / 号源列表的医务人员·科室·院区由 id 改名称（`ApptNameFiller` 服务端批量回填，导出同步改名称）；号源页与导出去掉内部外键「排班」列；S2 标记完成，停诊登记整体归 S6b | backend + admin + docs 各一提交 |
 | 2026-10-20 | **S3 开发轮（挂号链路与并发）**：B1 `POST /appt/patient/registration` 全链路 —— 幂等三键（执行锁 30s / 结果 24h）+ Redis 占位（15min、Lua 安全释放、异常降级纯 DB）+ `sys_user` 账号行 `FOR UPDATE` + 限购三条锁内精查 + `AVAILABLE→TAKEN` CAS（含 OCCUPY 台账）+ `payment(WAIT_PAY)`；`ApptBizException` + `BizCode` 统一 `data.bizCode`；`payment.expire-minutes` 配置化；患者账号与 2 就诊人 seed + 集成测试脚本（并发/幂等/限购/窗口外）；挂号单列表补就诊人与医生/科室/院区名称；集成测试① 实测 `PASS=14 FAIL=0 SKIP=0`；摘除防线①（`appt.slot-hold.enabled=false`）对照组同样 1 成交 / 49 由 DB CAS 拒绝；新增 `docs/test-evidence.md` 沉淀 S2/S3 数字 | backend + admin + docs 各一提交 |
+| 2026-10-20 | **S4 开发轮（支付链路）**：`PaymentChannel` 抽象 + Mock 渠道；C1/C5 回调共用 `PaymentCallbackDispatcher`（验签 → `appt_payment_callback` 三列去重 → 立即 ack → 有界线程池 + 新事务异步入账）；C2 模拟支付三分支（SUCCESS 合成回调 / FAIL 只留痕 / TIMEOUT 复用关单服务）；C3 状态查询 + 5 秒节流主动查单；`apptPaymentCloseJob` 两段式关单（近过期查单 + 到期关单，三步 CAS + RELEASE 台账 + 释放占位）；「钱到了号没了」自动建退款单走 C5 闭环保留 `payment=CLOSED`；支付/退款只读页补单号与名称；集成测试 `PASS=20 FAIL=0 SKIP=0` | backend + admin + docs 各一提交 |
 | 2026-10-19 | **导出 LocalTime 修复**：fesod 2.0.2 无 `LocalTime` 转换器（`LocalDate`/`LocalDateTime` 有内置），时段模板导出抛 `ExcelWriteDataConvertException`；新增 `appt.excel.LocalTimeConvert`（导出 `HH:mm:ss`、导入兼容 `HH:mm[:ss]`），`slotTemplate.startTime/endTime` 挂载；AGENTS §6 记第八坑；探针真实写 xlsx：slotTemplate/schedule/slot/registration/campus 五个 VO 全部 PASS | backend + docs 各一提交 |
 
 ---

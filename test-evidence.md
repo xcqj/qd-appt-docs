@@ -107,7 +107,28 @@ SELECT payment_no, amount, status, expire_time FROM appt_payment ORDER BY id DES
 
 ---
 
-## 5. 可直接引用的三句结论
+## 5. S4 支付链路（测试②③ + 竞态 + 并发关单 + 验签）
+
+```bash
+APPT_TOKEN='<appt_patient 的 token>' bash backend/script/test/s4_payment.sh
+```
+
+实测（`PASS=20 FAIL=0 SKIP=0`）：
+
+| 场景 | 期望 | 实测 |
+|---|---|---|
+| ③ 回调幂等 | 同一支付单回调 3 次仅入账 1 次 | `payment_callback` 仅 1 条；`payment` 仅 1 次 `PAID`；2 次重复投递 `duplicate=true` |
+| ② 关单回补 | 超时关单 → 号源回池 → 可再约 | `payment=CLOSED`、`registration=CLOSED` 且 `active_flag=NULL`、`slot=AVAILABLE` 且清空占用、台账有 `RELEASE`；同一号源再次预约成功 |
+| 竞态（钱到了号没了） | 关单后回调 → 自动全额退 | 生成 `refund` 并最终 `REFUNDED`；`payment` 保持 `CLOSED`（无「已关闭+已支付」双态）；`settle_status=REFUNDED` |
+| 并发关单 | 5 次并发仅 1 次生效 | 同一轮 `RELEASE` 台账增量为 1；`payment` 只有 1 行 `CLOSED` |
+| 验签 | 篡改签名被拒且不入账 | `CALLBACK_SIGN_INVALID`；回调记录 `sign_flag='1'`；`payment` 仍 `WAIT_PAY` |
+
+**边界声明**：本轮用 C2 的 `TIMEOUT`（演示压缩路径）验证关单服务，它与 30 秒巡检**复用同一 `PaymentCloseService`**；
+SnailJob 控制台建 `apptPaymentCloseJob`（30 秒）后的实跑属人工验收项，未纳入脚本。
+
+---
+
+## 6. 可直接引用的三句结论
 
 1. 「一个号只能卖一次」是数据库事实，不是应用判断：Redis 占位 → DB 行级 CAS → 联合唯一索引，三道防线任何一道被摘掉，成交数仍然是 1。
 2. 幂等的目标是「让用户看到同一张单」，不是「拒绝重复」：同 key 第二次返回 200 + `duplicate=true`，DB 仍只有 1 单。

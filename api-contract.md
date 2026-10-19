@@ -679,6 +679,14 @@ POST /appt/public/payment/callback/{channel}
 - **竞态分支（钱到了号没了）**：入账 CAS 发现 payment 已是 `CLOSED`（关单先于回调到达）→ 记异常 + **自动全额退 + 告警**，不是返回成功就算了（红线 7；对账 R3 兜底复查）。
 - 集成测试③按本契约造数据：同一支付单回调 3 次，仅 1 次入账（PRD §12）。
 
+**签名与幂等口径（2026-10-20 补，S4 实现）**
+
+- 待签串：支付 `paymentNo|tradeNo|notifyId|amount|result|payTime`；退款 `refundNo|paymentNo|amount|result|refundTime`；金额为两位小数字符串。
+- 签名：`HMAC-SHA256(待签串, payment.mock.sign-secret)` 的小写十六进制；验签失败 → `CALLBACK_SIGN_INVALID`（`code=400` + `data.bizCode`），落库 `sign_flag='1'`，不入账。
+- 应答体：`{accepted, duplicate, processStatus}`；`duplicate=true` 表示命中三列唯一键，直接 ack、不重复入账。
+- 回调记录状态：`PENDING`（已受理待入账）→ `SUCCESS`（入账完成）/ `IGNORED`（重复或渠道明确失败）/ `FAILED`（重试耗尽，等巡检查单兜底）。
+- 入账前置：回调金额必须等于 `registration.fee` 快照；渠道查单有记录时状态与金额须与回调体一致（双事实），渠道无记录时按回调体处理并记告警。
+
 ### 5.2 模拟支付（C2）
 
 ```http
@@ -786,6 +794,12 @@ POST /appt/public/refund/callback/{channel}
 
 - 失败（`result=FAIL`）→ 退款单按退避重试（次数可配），仍失败则 Refund 置 `FAILED` 并进后台人工队列 + 告警（PRD §6.6；对账 R5 复查）。`FAILED` 为**终态**：如确需再退，由人工触发另建退款单（`refund_no` 重新取号），不在原单上回滚复用——保证退款幂等链可追溯。
 - 重复回调：`refund_no` + 状态 CAS 天然幂等，第二次影响 0 行。
+
+**实现口径（2026-10-20 补，S4 实现）**
+
+- `refund_no` 前缀用 **`F`**（`F + yyyyMMdd + 6 位`，以 `database-design.md` 的 DDL 注释为准；上文示例的 `R` 与挂号单号冲突，已作废）。
+- 本期不新增退款回调表：复用 `appt_payment_callback`，字段映射为「`payment_no` = 关联支付单号、`trade_no` = 退款单号、`notify_id` = `REFUND-{refundNo}`」，保证三列唯一键对退款回调同样生效。
+- 「钱到了号没了」自动退款：payment 保持 `CLOSED`（不回写 `PAID`），退款成功后仅回写 `registration.settle_status=REFUNDED` 与 refund 状态。
 
 ---
 
