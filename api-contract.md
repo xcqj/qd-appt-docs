@@ -959,9 +959,15 @@ POST /appt/admin/schedule/generate
 
 **业务行为：** 按该人员的 `SlotTemplate`（午别 × 起止 × 步长 × 门诊类型）为范围内每个有模板的日期批量生成 Schedule + Slot（直接 `AVAILABLE`）；`UNIQUE(staff_id, visit_date, period)` + 批号保证重跑不重复生成。放号策略 `rolling` 下新生成Slot 直接可约；`immediate` 模式同效果（PRD §6.1）。
 
-**预览：** `GET /appt/admin/schedule/preview?staffId=&startDate=&endDate=` —— 将生成的排班与号数预览，不落库。
+**多模板仲裁：** 同一人员同一午别存在多个模板（`uk(staff_id, period, clinic_type)` 允许门诊类型不同）时，取 `clinic_type = medical_staff.clinic_type` 的那条，无匹配则取 **id 最小**者；落选模板计入 `arbitratedCount`（D-S1-7「一行 = 一个出诊身份」）。
 
-**返回至少：** `batchNo / scheduleCount / slotCount`。
+**窗口：** 生成**不受 D1 可约窗口限制**（任意日期区间，单次 ≤ 31 天），生成的号源一律 `AVAILABLE`；`[今日+1, 今日+N]` 的窗口过滤由查询侧负责（S5）。
+
+**批号：** `G + yyyyMMdd + 6 位当日序列`（如 `G20261019000001`，长度 15）；同一批号写入 `slot_ledger.batch_no`，供台账倒查。
+
+**返回：** `batchNo / scheduleCount / slotCount / skippedCount / arbitratedCount / elapsedMs`。`skippedCount` = 计划内已存在的号源数（同参数重跑时为计划总量，新增为 0）；`scheduleCount` / `slotCount` 只统计**本次新增**。
+
+**预览：** `GET /appt/admin/schedule/preview?staffId=&startDate=&endDate=` —— 与生成共用同一套展开规则（同一 `plan` 函数），**不落库、不占批号**。返回 `staffId / staffName / startDate / endDate / plannedSchedule / plannedSlot / existingSchedule / existingSlot / newSchedule / newSlot / arbitratedCount / items[]`；`items` 逐 (日期 × 午别)：`visitDate / period / clinicType / fee（字符串） / startTime / endTime（HH:mm） / plannedSlot / existingSlot / newSlot`。
 
 ### 8.3 停诊处理（F2）
 
