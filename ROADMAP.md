@@ -36,7 +36,7 @@
 | **S3** | 挂号链路 + 并发三道防线 + 限购与冲突校验 | 高并发争抢正确性达标 | docs / backend（admin 只读页） | uni-app（**延后**） | ① | **已完成 2026-10-20** |
 | **S4** | **支付链路**：支付单 + 渠道抽象 + 模拟渠道 + 回调幂等 + 超时关单与回补 | 交易链路闭环 | docs / backend | uni-app（**延后**） | ②③ | **已完成 2026-10-20** |
 | **S5** | 排班/医生查询接口 + 午别余量批量聚合 + 缓存 | 性能对比可演示 | docs / backend / admin | plus-ui：排班页余量 | ⑤ | **已完成 2026-10-20** |
-| **S6a** | 退号与退款、签到（分诊端扫码）、爽约扫描 | 状态机闭环（除停诊） | docs / backend / admin | uni-app（**延后**） | ⑥ | 未开始 |
+| **S6a** | 退号与退款、签到（分诊端扫码）、爽约扫描 | 状态机闭环（除停诊） | docs / backend / admin | uni-app（**延后**） | ⑥ | **已完成 2026-10-20** |
 | **S6b** | 停诊批量流转、黑名单、分诊台模式 | 批量操作不重不放 | docs / backend / admin | uni-app（**延后**） | — | 未开始 |
 | **S7** | 对账（号源 + 支付）+ 台账 + 看板 + 业务数据 seed | **可交付**（= 本期结束） | docs / backend / admin | plus-ui：看板与对账页 | — | 未开始 |
 
@@ -46,7 +46,7 @@
 - ③ 支付回调重复 3 次仅入账 1 次 —— S4（**2026-10-20 通过**：回调记录 1 条、入账 1 条）
 - ④ 同一医生/同一天重复执行排班生成，第二次新增 0 条（幂等）—— S2（**2026-10-20 通过**：80/2820 → 0/0/2820）
 - ⑤ 余量缓存写入后与 DB 聚合差值在读路径/TTL 内收敛为 0 —— S5
-- ⑥ 爽约扫描某一轮被跳过，下一轮全量兜底不漏判 —— S6a
+- ⑥ 爽约扫描某一轮被跳过，下一轮全量兜底不漏判 —— **S6a（2026-10-20 通过**：−3h 陈旧单由兜底批判为 `NOSHOW`）
 
 **前端归属说明**：PRD §13.3 原注只写了「uni-app 患者端页面穿插于 S3~S6；分诊台模式在 S6」，**未写 plus-ui 后台页面的切片归属**。上表按里程碑反推补齐（见待决项 5）。**患者端（uni-app）整体延后**：2026-10-19 拍板「先完成后端与后台管理，再做患者端」，故 S3/S4/S6a/S6b 的患者端归属标「延后」——这些切片的验收以 **API 级集成测试**为准，不依赖 UI 完成。
 
@@ -103,13 +103,16 @@
 
 > **顺序（2026-10-20 定）**：先 S6a 后 S6b，不合并。S6b 的停诊处理 = 批量「被动退号 + 退款」，必须复用 S6a 的退号单柱；黑名单的计数来源（退号 / 爽约）也全在 S6a 产生。
 
-- [ ] 退号与退款（含 `settle_status` 流转）、签到（扫码 + 手动补签）、爽约扫描（半开窗口 + 全量兜底）
-- [ ] 6 种状态覆盖：`BOOKED→CANCELED_ACTIVE / SIGNED / NOSHOW`、`SIGNED→COMPLETED`
-- [ ] 集成测试 ⑥：某轮扫描被跳过，下一轮全量兜底不漏判
-- [ ] 退号时限语义：截止 `visit_date - 1 天 23:00:00`，`now < 截止` 才可退；截止后不提供该分支（PRD §6.7 / 契约 §4.5）
-- [ ] 状态流转**显式写 `update_time`**：黑名单按「状态流转时间近 180 天」统计，而 MyBatis-Plus 自动填充对 `update(null, wrapper)` **不生效**，不显式 `set` 就没有窗口基准（PRD §6.9）
-- [ ] `RemainService` 接入两个新调用点：退号回池 `TAKEN→AVAILABLE` **+1**、过期扫描 `AVAILABLE→EXPIRED` **−1**；`TAKEN→EXPIRED` 保持 0（技术方案 §3.2）
-- [ ] 后台手动退号（管理端）：不受 23:00 限制，状态记 `CANCELED_ACTIVE` 且**计入**黑名单统计（避免成为绕过口）
+- [x] 退号与退款（含 `settle_status` 流转）、签到（扫码 + 手动补签）、爽约扫描（半开窗口 + 全量兜底）—— 2026-10-20：`RegistrationCancelService`（单柱 CAS + 回池 + 事务内建退款单 + 事务外渠道退款 + `CANCEL_SUCCESS` 站内信）、`SignService`（E1/E2 同一边，仅 `sign_type` 区分）、`ApptNoShowJobService`（主批 `[now-35m, now-30m)` + 全量兜底 `<= now-35m`，同轮扫号源过期）
+- [x] 6 种状态覆盖：`BOOKED→CANCELED_ACTIVE / SIGNED / NOSHOW`、`SIGNED→COMPLETED` —— 2026-10-20：四条边全部收敛到 `RegistrationStateService`（`markCanceledActive/markSigned/markNoShow/markCompleted`），`ApptCompleteJobService` 每日 23:30 置完成
+- [x] 集成测试 ⑥：某轮扫描被跳过，下一轮全量兜底不漏判 —— 2026-10-20 实测通过：脚本用「`time_point=now-3h` 的陈旧单」等价模拟窗口已滑过，兜底批判为 `NOSHOW`（`s6a_state_machine.sh` `PASS=19 FAIL=0`，见 `test-evidence.md` §8）
+- [x] 退号时限语义：截止 `visit_date - 1 天 23:00:00`，`now < 截止` 才可退；截止后不提供该分支（PRD §6.7 / 契约 §4.5）—— 用例 2 断言 `REFUND_DEADLINE_PASSED`
+- [x] 状态流转**显式写 `update_time`**：黑名单按「状态流转时间近 180 天」统计，而 MyBatis-Plus 自动填充对 `update(null, wrapper)` **不生效**，不显式 `set` 就没有窗口基准（PRD §6.9）—— 四条新边与既有 `markBooked/markClosed/markSettled` 全部补上
+- [x] `RemainService` 接入两个新调用点：退号回池 `TAKEN→AVAILABLE` **+1**、过期扫描 `AVAILABLE→EXPIRED` **−1**；`TAKEN→EXPIRED` 保持 0（技术方案 §3.2）—— `SlotStateService.expire()` 与 `releaseToPool` 分属两个方法，语义不合并
+- [x] 后台手动退号（管理端）：不受 23:00 限制，状态记 `CANCELED_ACTIVE` 且**计入**黑名单统计（避免成为绕过口）—— `POST /appt/admin/registration/{id}/cancel` + 挂号单列表「退号」按钮
+- [x] 附带：B2 我的预约列表 / B3 预约详情（含就诊码、证件号脱敏）—— 患者端退号链路的入口
+- [x] 附带：`POST /appt/admin/job/{jobName}/run` 任务手动重跑（白名单 4 个任务 + `appt:job:run`），解决 SnailJob 无法从 HTTP 触发、脚本无法自验的问题（技术方案 §3.3 原本要求）
+- [x] 联调数据：`appt_s6a_seed.sql` 造 `triage` 角色 + `appt_triage` 账号 + 两个按钮权限（缺任一则签到 403 / 后台按钮不显示）
 
 ### S6b 停诊批量与风控（处理 / 黑名单 / 分诊台）
 
@@ -131,13 +134,13 @@
 |---|---|---|---|
 | `active_flag` NULL 语义 + `UNIQUE(slot_id, active_flag)` | S1（建）/ S3（用） | I1 实测：终态单共存、第二笔有效单报 1062 | ✅ |
 | 三道防线防超卖（Redis → DB CAS → 唯一索引） | S3 | 50 并发：1 成功 + 49 返回 1062/已被预约，`registration` 仅 1 行 `active_flag=1` | ✅ 2026-10-20 实测（1 成交 / 49 SLOT_GONE，`active_flag=1` 仅 1 行，payment 1 笔；**摘除防线① 对照组同样 1 成交**） |
-| 条件 CAS 即幂等 | S3 / S4 / S6a | 重复请求第二次 `affected rows = 0` | S3 号源 CAS + S4 支付/退款/关单 CAS 已落地 2026-10-20；退号/签到/停诊待后续切片 |
+| 条件 CAS 即幂等 | S3 / S4 / S6a | 重复请求第二次 `affected rows = 0` | S3 号源 + S4 支付/退款/关单 + S6a 退号/签到/爽约/置完成 CAS 已落地 2026-10-20；停诊待 S6b |
 | 停诊两段式 + 批号幂等 | S6b（登记 + 处理） | 同一批号二次执行全部影响 0 行；登记按日拆分共用批号 | 未开始（登记 2026-10-19 由 S2 移入） |
 | 放号滚动窗口 D1（可配） | S2（任务侧）/ S5（查询侧） | 窗口外不可约；08:00 任务只生成「今日+N」 | ✅ 任务侧 2026-10-20 验收（只生成目标日、重跑 0 新增）；查询侧过滤归 S5 |
 | 余量聚合 M×2 → 1 + Lua EXISTS 守卫 | S5 | 单屏 1 次聚合 SQL + 压测对比表 | ✅ 2026-10-20 实测（单屏冷启动 3 条 / 命中 2 条，与医生数无关；`redis` p95 9.3ms 命中率 100% / `db` p95 10.6ms；1000 次挂号关单后差值 0，删键不创建） |
 | 回调幂等 + 「钱到了号没了」 | S4 | 回调 3 次仅 1 次入账；关单后回调 → 自动退款 + 告警 | ✅ 2026-10-20 实测（3 次投递回调记录仅 1 条、payment 仅 1 次 PAID；关单后回调 → refund REFUNDED、payment 保持 CLOSED） |
 | 对账七查 + 保守修复 | S7 | R1 幽灵占号自动回池；R4 只告警不自动修 | 未开始 |
-| 爽约半开窗口 + 全量兜底 | S6a | 跳过一轮后下一轮补判，漏判 0 | 未开始 |
+| 爽约半开窗口 + 全量兜底 | S6a | 跳过一轮后下一轮补判，漏判 0 | ✅ 2026-10-20：主批 `[now-35m, now-30m)` + 兜底 `<= now-35m`，脚本用 −3h 陈旧单等价模拟「窗口已滑过」，兜底命中并判 `NOSHOW` |
 | 单号规则（前缀 + 日期 + Redis INCR） | S3 | 并发 50 单号不重复、跨日重置 | 代码完成 2026-10-20（R/P 前缀 + `SequenceUtils` 每日重置；并发 50 未出现重号） |
 | `Idempotency-Key`（仅 B1） | S3 | 同 key 双击只产生一笔待支付 | ✅ 2026-10-20 实测（第二次 `data.duplicate=true`，DB 仍 1 单） |
 | 限购三条 + 账号行 `SELECT ... FOR UPDATE` | S3 | 同账号并发 3 单仅 1 笔成功 | ✅ 2026-10-20 实测（三条各命中：DEPT_DAY / TIME_CONFLICT / HOLD_MAX） |
@@ -198,6 +201,8 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-19 | **导出 LocalTime 修复**：fesod 2.0.2 无 `LocalTime` 转换器（`LocalDate`/`LocalDateTime` 有内置），时段模板导出抛 `ExcelWriteDataConvertException`；新增 `appt.excel.LocalTimeConvert`（导出 `HH:mm:ss`、导入兼容 `HH:mm[:ss]`），`slotTemplate.startTime/endTime` 挂载；AGENTS §6 记第八坑；探针真实写 xlsx：slotTemplate/schedule/slot/registration/campus 五个 VO 全部 PASS | backend + docs 各一提交 |
 | 2026-10-20 | **S5 开发轮（查询聚合与余量缓存）**：A1–A7 公共查询组（院区 / 科室树按「该院区有出诊医务人员」剪枝 / 医生分页与主页（`favorited` 可选登录，未登录 false 不 401）/ 日期栏双模式 / 当日出诊医生 + 午别余量 / 可约时间点），D1 窗口统一取 `booking.window.days`，窗口外按无数据返回空集合；余量改「一次聚合」`GROUP BY schedule_id, period`；`RemainService` 读（MGET → 回源 → SETNX 回填 600s）写（`SlotStateService` afterCommit → Lua `EXISTS→INCRBY`，无键不创建，过期 0 增量）+ `appt.remain.cache=redis\|db` 开关；admin 排班页余量列；新增两个脚本（读压测 / 1000 次一致性） | backend + admin + docs 各一提交 |
 | 2026-10-20 | **S5 验收实测**：读压测 100 并发 ×1000 样本 ×3 轮 —— 单屏 SQL 冷启动 3 条 / 命中 2 条 / `db` 3.2 条（与医生数无关），`redis` p95 9.3ms、命中率 100%，`db` p95 10.6ms（差距 14%，落在波动内，默认保持 `redis`）；一致性 1000 次「挂号 → 超时关单回补」差值恒 0 + 删键不创建（`PASS=11 FAIL=0`）；回归 S3 `PASS=14`、S4 `PASS=21`；压测脚本修两处健壮性（跳过无人员的残留院区、`date +%s%N` 计时）与 token 兼容（`APPT_TOKEN` 或 `TOKEN`） | backend + docs 各一提交 |
+| 2026-10-20 | **S6a 开发轮（状态机闭环与售后链路）**：退号 B5（单柱 CAS + 回池 + 事务内建退款单 + 事务外渠道退款 + `CANCEL_SUCCESS` 站内信）、签到 E1/E2（`@SaCheckRole("triage")`，同一条状态边）、爽约+过期合并扫描（主批 + 全量兜底 + `NOSHOW_RECORD` 站内信 + `SlotStateService.expire` 余量 −1）、置完成 23:30、B2 我的预约列表 / B3 详情（就诊码、证件号脱敏）、后台手动退号 F10、任务手动重跑端点（白名单 4 任务）、`appt_s6a_seed.sql`（triage 角色/账号 + 两个按钮权限）、`s6a_state_machine.sh` | backend + admin + docs 各一提交 |
+| 2026-10-20 | **S6a 验收实测**：`s6a_state_machine.sh` `PASS=19 FAIL=0 SKIP=0`（退号 7 项含余量 −1 再 +1 / 截止 `REFUND_DEADLINE_PASSED` / 签到与重复签到 / 爽约主批 2 条 + 全量兜底 / 过期 `EXPIRE` / 置完成）；回归 S4 `PASS=21`、S3 `PASS=13 SKIP=1`（窗口外样本缺失，非回归）。脚本修两处：造数 SQL 误取 `appt_slot` 不存在的 `user_id/patient_id` 列、23 点后退号用例须取「今日+2」号源 | backend + docs 各一提交 |
 | 2026-10-20 | **S5 手工验收收口**：A1 封面 `coverImageUrl` 翻译（ossId → URL，直链数据回空串由前端 `\|\|` 兜底）、A3 分页与中文关键字、A4 匿名 200/不存在 404、A5 医生模式定长 7 项、A6 下单 48→47 与关单回 47→48、`remain=0` 午别仍返回、后台余量列与导出（无该列）全部通过；发现并修两处：① 缺必填参数/参数类型不合法由框架 500 收口为 **400**（`ApptExceptionHandler` 加两个 handler 并按 appt 包限定 + 最高优先级）；② `releaseToPool` CAS 未命中时**仍释放本单占位键**（Lua 比对 value），消除「DB 可约 + Redis 仍占用」的孤儿键导致的持续 `SLOT_GONE`；重启后复跑 `s4_payment.sh` 仍 `PASS=21 FAIL=0` | backend + docs 各一提交 |
 
 ---
@@ -255,6 +260,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
 | v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
 | v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
+| v0.4.6 | 2026-10-20 | **S6a 实现与文档**：退号/签到/爽约/置完成四条状态边落 `RegistrationStateService`（全部显式 `update_time`）、`SlotStateService.expire`（余量 −1，与 `releaseToPool` 分离）、`RefundService` 拆 `createForPayment`/`dispatch` 并新增 `createPaidRefund`（PAID 入口）、`NoticeSender`、B2/B3 我的预约、后台手动退号 F10、任务手动重跑端点；契约 §4.5 补实现口径、§8.5 落 F10 与任务重跑；ROADMAP S6a 全项勾选 + §2 状态 + §3.9 两行 + §5 进度；新增 `appt_s6a_seed.sql` 与 `s6a_state_machine.sh` |
 | v0.4.5 | 2026-10-20 | **S6 口径决策（D-S6-1）**：① 停诊被动退号**不计入**黑名单；② 黑名单保留「退号 + 爽约」双计数（计入 `CANCELED_ACTIVE` + `NOSHOW`，不计 `CANCELED_PASSIVE` + `CLOSED`；按 `user_id`、`update_time` 近 180 天），理由见 PRD §6.9；③ 明确「23:00 后不可退号」是**不允许退**而非不计（该路径不存在，只落爽约）；④ 后台手动退号不受 23:00 限制但记 `CANCELED_ACTIVE` 且计入，避免绕过；⑤ ROADMAP S6a/S6b 补顺序说明（先 a 后 b）、`update_time` 显式写入坑位、`RemainService` 两处新接入点与 S6b `AVAILABLE→SUSPENDED −1`；⑥ 契约 §4.4 补「CLOSED 不计入」、§4.5 补截止语义与计数口径 |
 | v0.4.4 | 2026-10-20 | **S5 实现与文档 + 验收实测**：`/appt/public` 落地 A1–A7（匿名）、余量一次聚合（`GROUP BY schedule_id, period`）+ `appt:remain:{scheduleId}:{period}` 缓存（MGET 批量读 / SETNX 回填 600s / afterCommit + Lua EXISTS 守卫 / 双模式开关）、D1 窗口过滤；技术方案 §3.2 验证数据回填（SQL 3/2/3.2 条、`redis` p95 9.3ms 命中率 100%、`db` p95 10.6ms、一致性差值 0）与默认值裁决；`test-evidence.md` 增 §7（含 S3/S4 回归、手工验收、参数 400 语义、占位键释放修复）；`script/test/README.md` 增两脚本前置与留档口径；admin 排班页余量列 |
 | v0.4.2 | 2026-10-20 | **S4 文档 + 文档对账**：契约 §5.1 补待签串/ack 结构/入账前置、§5.5 订正 `refund_no` 前缀为 F 与退款回调复用 `appt_payment_callback` 的字段映射；ROADMAP S4 完成与 ①②③④ 通过标记；技术方案 §1.4 补 `payment.refund.auto-enabled`/`max-retry`/`retry-backoff-seconds` 并去除重复行、§3.1/§3.3/§3.4/§3.5 验证数据回填；database-design §3.5 补退款回调复用说明；backend AGENTS §6 补三条坑位（JDT 与 javac 对非法字符差异 / MP 批量插入不参与外层事务 / `@Async` 默认无界执行器） |

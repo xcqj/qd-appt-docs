@@ -551,6 +551,7 @@ POST /appt/patient/registration/{id}/cancel
 - **退号时限语义**：截止时刻为 `visit_date - 1 天 23:00:00`，判断 `now < 截止` 才可退；截止后**不提供**该分支（返回 `REFUND_DEADLINE_PASSED`），患者只能落到爽约。因此不存在「截止后靠不退号躲计数」的路径（PRD §6.9）。
 - **计数口径（D-S6-1）**：计入 `CANCELED_ACTIVE` + `NOSHOW`，不计 `CANCELED_PASSIVE` + `CLOSED`；按 `user_id`、以状态流转时间（`update_time`）落在近 180 天为准。
 - **后台手动退号**（管理端 F 系列，S6a 落）：不受 23:00 限制（人工兜底），状态记 `CANCELED_ACTIVE` 且**计入**统计，避免成为绕开黑名单的后门。
+- **实现（2026-10-20，S6a）**：`RegistrationCancelService` —— 单柱 CAS（`BOOKED→CANCELED_ACTIVE`）→ 号源 `releaseToPool`（`TAKEN→AVAILABLE` 余量 +1 / `TAKEN→EXPIRED` 0）→ 事务内建退款单 + `settle_status=WAIT_REFUND` → 站内信 `CANCEL_SUCCESS`；**渠道退款在事务提交后**执行（外呼失败不回滚退号）。
 
 ### 4.6 就诊人列表（B6）
 
@@ -1039,12 +1040,16 @@ POST /appt/admin/suspend/handle
 - **F4 数据看板** `GET /appt/admin/dashboard`：`appt:dashboard:query`；今日放号 / 已预约 / 已签到 / 爽约率 / 退号率 / 支付成功率 / 科室 TOP5（PRD §10.2）。
 - **F8–F22 编号分配**（字段级条目均在 S5–S7 联调前补；F16 / F22 编号已被 §11 待确认 #8 与 F3 条目引用，**锁定不变**；F15 / F21 / F23–F24 预留）：
   - F8 挂号单列表 / F9 挂号单详情（数据范围按 `user_id` 服务端强过滤，红线 10）
-  - F10 手动退号（复用 B5 服务端逻辑）
+  - F10 手动退号（复用 B5 服务端逻辑）——2026-10-20 落地：`POST /appt/admin/registration/{id}/cancel`，权限 `appt:registration:cancel`，**不校验 23:00 截止**（人工兜底），状态记 `CANCELED_ACTIVE` 且计入黑名单统计
   - F11 签到记录 / F12 加号记录
   - F13 支付单列表 / F14 退款单列表
   - F16 渠道配置（落业务表还是 `sys_config` 见 §11 待确认 #8）
   - F17 黑名单管理 / F18 限购规则 / F19 就诊人管理 / F20 任务日志
   - F22 对账结果列表（F3 明细入口）
+- **任务手动重跑（F20 扩展）** `POST /appt/admin/job/{jobName}/run`：`appt:job:run`；**白名单**任务名
+  `apptNoShowJob`（爽约+过期扫描）/ `apptCompleteJob`（置完成）/ `apptPaymentCloseJob`（关单巡检）/ `apptReleaseJob`（放号）；
+  同步返回 `jobName/batchNo/status/affectedRows/message`。与定时触发共用同一 Service，**同受 Redisson 互斥**：上一轮未结束时返回 `SKIPPED`。
+  （2026-10-20，S6a 落地；技术方案 §3.3 原本就要求「任务日志可手动重跑」）
 - **F25–F30** 六实体基础数据 CRUD：走 §8.1 生成器约定。
 
 ---

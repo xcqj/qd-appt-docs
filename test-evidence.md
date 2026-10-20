@@ -209,6 +209,42 @@ APPT_TOKEN='<token>' bash script/test/s5_remain_consistency.sh
 > 2026-10-20 二次复跑：`releaseToPool` 占位键释放修复生效（重启后）再跑 `s4_payment.sh`，
 > 仍 `PASS=21 FAIL=0 SKIP=0` —— 该修复只影响 CAS 未命中的异常分支，正常关单链路无回归。
 
-**边界声明**：S5 只覆盖「占用（−1）/ 回补（+1）」两条写路径；`AVAILABLE→EXPIRED`（过期扫描）为 0 增量、
-`AVAILABLE→SUSPENDED`（停诊）为 −1，两个调用点分别在 S6a / S6b 接入**同一个** `RemainService`。
+**边界声明**：S5 只覆盖「占用（−1）/ 回补（+1）」两条写路径；`AVAILABLE→EXPIRED`（过期扫描）为 **−1**（S6a 已接入）、
+`AVAILABLE→SUSPENDED`（停诊）为 **−1**（S6b 待接入）；而 `TAKEN→EXPIRED` 是 **0**（已占的不是可约，过期不改变可约数）。
+四种变迁的增量口径见技术方案 §3.2，任何一处写反都会让余量与 DB 长期漂移。
 `SlotGenerateService` 批量 insert 可约号源不产生脏值（新排班此前无键），仅「对已存在排班补号」可能滞后 ≤600s，属显示侧可接受。
+
+---
+
+## 8. S6a 状态机与售后链路（集成测试⑥）
+
+复现入口：`backend/script/test/s6a_state_machine.sh`（前置：`script/sql/appt_s6a_seed.sql` 造 triage 角色/账号与两个按钮权限）。
+
+```bash
+APPT_TOKEN='<appt_patient token>' \
+TRIAGE_TOKEN='<appt_triage token>' \
+ADMIN_TOKEN='<超管 token>' \
+  bash script/test/s6a_state_machine.sh
+```
+
+### 8.1 状态边与副作用
+
+| 场景 | 期望 | 实测（2026-10-20，`PASS=19 FAIL=0 SKIP=0`） |
+|---|---|---|
+| B5 退号（已支付） | `CANCELED_ACTIVE` + `cancel_type=ACTIVE` + `active_flag=NULL`；号源回池；退款单生成；`CANCEL_SUCCESS` 站内信；余量 −1 再 +1 | ✅ 7 项断言全通过（含余量回到退号前、台账 `RELEASE`） |
+| 退号截止 | `visit_date=今天` → `REFUND_DEADLINE_PASSED` | ✅（当日 23:43 跑，今日+1 的号也已被拒——证明截止判断按「前一日 23:00」生效） |
+| E1 签到 | `BOOKED→SIGNED` + `sign_type=SCAN`；重复签到 `SIGN_WINDOW_CLOSED` | ✅ 两项均通过 |
+| 爽约主批 | `time_point=now-32min` → `NOSHOW` | ✅（任务摘要：爽约=2 号源过期=0） |
+| 爽约全量兜底（集成测试⑥） | `time_point=now-3h`（等价「某轮被跳过」）→ `NOSHOW` + `NOSHOW_RECORD` 站内信 | ✅ 兜底批判为 `NOSHOW`，站内信 2 条 |
+| 号源过期 | `AVAILABLE→EXPIRED` + 台账 `EXPIRE` | ✅ |
+| 置完成 | `SIGNED` + `visit_date < 今天` → `COMPLETED` + `active_flag=NULL` | ✅ |
+
+> 脚本自带清理：结束时删掉造数行与该账号近 30 分钟的站内信，所以跑完后台只留下用例 1 的
+> 1 条「已退号(主动)」记录——这是正常现象，不是缺数据。S3/S4 脚本的 `reset_account` 会清空该账号全部挂号单，
+> 因此**先跑 S3/S4 再打开后台列表会看到空表**。
+
+### 8.2 边界声明
+
+- 本轮只做**主动**退号；`CANCELED_PASSIVE`（停诊被动退号）与黑名单策略归 S6b，届时复用同一 `RegistrationStateService`。
+- 过期用例由 SQL 直插号源（绕过单柱），缓存与 DB 必然相差 1，因此只断言状态与台账；余量 −1 的口径由 `s5_remain_consistency.sh` 在真实链路上覆盖。
+- 任务用例经 `POST /appt/admin/job/{jobName}/run` 触发（白名单 + Redisson 互斥），与 SnailJob 定时触发走同一 Service。
