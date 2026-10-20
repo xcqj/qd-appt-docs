@@ -91,9 +91,13 @@
 
 ### S5 查询聚合与缓存
 
-- [ ] 午别余量一次批量聚合（动态分组，不写死上午/下午）
-- [ ] Redis `appt:remain:` 缓存，写路径唯一入口 + Lua EXISTS 守卫
-- [ ] 验收：单屏由 M×2 次 COUNT 降至 1 次聚合，压测对比留档
+- [x] 公共查询组 A1–A7（`/appt/public/**`，全匿名）—— 2026-10-20：`PublicCatalogService`（院区 / 科室树剪枝 / 医生分页与主页 / 可约时间点）+ `PublicScheduleQueryService`（日期栏双模式 / 当日出诊医生 + 午别余量）；5 个 `schedule/controller/Public*Controller`；`security.excludes` 原有 `/appt/public/**` 白名单即可，未改配置；图片字段按项目约定返回**原始值 + `coverImageUrl`/`avatarUrl`**（`@Translation` 翻译 ossId，前端按 `*Url || *` 兜底）
+- [x] 午别余量一次批量聚合（动态分组，不写死上午/下午）—— `ApptSlotMapper.countByScheduleGroupPeriod`：`GROUP BY schedule_id, period` 一条 COUNT，走 `idx_slot_schedule_status`；单屏 `/schedule/staffs` ≤3 条 SQL（排班 + 医生资料 + 余量）
+- [x] Redis `appt:remain:` 缓存，写路径唯一入口 + Lua EXISTS 守卫 —— `RemainService`：MGET 批量读 → 未命中回源聚合 → `SETNX` 回填 TTL 600s；`SlotStateService.occupy / releaseToPool` 在事务 `afterCommit` 经 Lua `EXISTS → INCRBY ±1`（无键不创建）；`appt.remain.cache=redis|db` 开关，db 模式读写两侧旁路
+- [x] 写路径增量语义按 target 分支：可约→已占 −1、已占→可约 +1、已占→已过期 0（红线 9，过期不是回池）
+- [x] admin 排班页「余量」列（与患者端同一 `RemainService`/缓存口径；`@ExcelIgnoreUnannotated` 保证不进导出）
+- [x] 手工验收 2026-10-20：A1 封面 ossId 翻译 / A3 分页+关键字 / A4 匿名 200 + 不存在 404 / A5 医生模式定长 7 项 / A6 下单 −1 与 `remain=0` 仍返回 / 参数缺失与类型错误 400 / 后台余量列与导出
+- [x] 验收：单屏由 M×2 次 COUNT 降至 1 次聚合，压测对比留档 —— 2026-10-20 实测：冷启动 3 条 SQL / 缓存命中 2 条 / `db` 3 条（与医生数无关）；100 并发 ×1000 样本，`redis` p95 9.3ms、`db` p95 10.6ms、命中率 100%；1000 次挂号/关单后缓存 vs DB 差值 0（`PASS=11 FAIL=0`）；S3 `PASS=14`、S4 `PASS=21` 回归通过。详见 `test-evidence.md` §7
 
 ### S6a 状态机闭环（退号 / 退款 / 签到 / 爽约）
 
@@ -124,7 +128,7 @@
 | 条件 CAS 即幂等 | S3 / S4 / S6a | 重复请求第二次 `affected rows = 0` | S3 号源 CAS + S4 支付/退款/关单 CAS 已落地 2026-10-20；退号/签到/停诊待后续切片 |
 | 停诊两段式 + 批号幂等 | S6b（登记 + 处理） | 同一批号二次执行全部影响 0 行；登记按日拆分共用批号 | 未开始（登记 2026-10-19 由 S2 移入） |
 | 放号滚动窗口 D1（可配） | S2（任务侧）/ S5（查询侧） | 窗口外不可约；08:00 任务只生成「今日+N」 | ✅ 任务侧 2026-10-20 验收（只生成目标日、重跑 0 新增）；查询侧过滤归 S5 |
-| 余量聚合 M×2 → 1 + Lua EXISTS 守卫 | S5 | 单屏 1 次聚合 SQL + 压测对比表 | 未开始 |
+| 余量聚合 M×2 → 1 + Lua EXISTS 守卫 | S5 | 单屏 1 次聚合 SQL + 压测对比表 | ✅ 2026-10-20 实测（单屏冷启动 3 条 / 命中 2 条，与医生数无关；`redis` p95 9.3ms 命中率 100% / `db` p95 10.6ms；1000 次挂号关单后差值 0，删键不创建） |
 | 回调幂等 + 「钱到了号没了」 | S4 | 回调 3 次仅 1 次入账；关单后回调 → 自动退款 + 告警 | ✅ 2026-10-20 实测（3 次投递回调记录仅 1 条、payment 仅 1 次 PAID；关单后回调 → refund REFUNDED、payment 保持 CLOSED） |
 | 对账七查 + 保守修复 | S7 | R1 幽灵占号自动回池；R4 只告警不自动修 | 未开始 |
 | 爽约半开窗口 + 全量兜底 | S6a | 跳过一轮后下一轮补判，漏判 0 | 未开始 |
@@ -186,6 +190,9 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-20 | **S3 开发轮（挂号链路与并发）**：B1 `POST /appt/patient/registration` 全链路 —— 幂等三键（执行锁 30s / 结果 24h）+ Redis 占位（15min、Lua 安全释放、异常降级纯 DB）+ `sys_user` 账号行 `FOR UPDATE` + 限购三条锁内精查 + `AVAILABLE→TAKEN` CAS（含 OCCUPY 台账）+ `payment(WAIT_PAY)`；`ApptBizException` + `BizCode` 统一 `data.bizCode`；`payment.expire-minutes` 配置化；患者账号与 2 就诊人 seed + 集成测试脚本（并发/幂等/限购/窗口外）；挂号单列表补就诊人与医生/科室/院区名称；集成测试① 实测 `PASS=14 FAIL=0 SKIP=0`；摘除防线①（`appt.slot-hold.enabled=false`）对照组同样 1 成交 / 49 由 DB CAS 拒绝；新增 `docs/test-evidence.md` 沉淀 S2/S3 数字 | backend + admin + docs 各一提交 |
 | 2026-10-20 | **S4 开发轮（支付链路）**：`PaymentChannel` 抽象 + Mock 渠道；C1/C5 回调共用 `PaymentCallbackDispatcher`（验签 → `appt_payment_callback` 三列去重 → 立即 ack → 有界线程池 + 新事务异步入账）；C2 模拟支付三分支（SUCCESS 合成回调 / FAIL 只留痕 / TIMEOUT 复用关单服务）；C3 状态查询 + 5 秒节流主动查单；`apptPaymentCloseJob` 两段式关单（近过期查单 + 到期关单，三步 CAS + RELEASE 台账 + 释放占位）；「钱到了号没了」自动建退款单走 C5 闭环保留 `payment=CLOSED`；支付/退款只读页补单号与名称；集成测试 `PASS=20 FAIL=0 SKIP=0` | backend + admin + docs 各一提交 |
 | 2026-10-19 | **导出 LocalTime 修复**：fesod 2.0.2 无 `LocalTime` 转换器（`LocalDate`/`LocalDateTime` 有内置），时段模板导出抛 `ExcelWriteDataConvertException`；新增 `appt.excel.LocalTimeConvert`（导出 `HH:mm:ss`、导入兼容 `HH:mm[:ss]`），`slotTemplate.startTime/endTime` 挂载；AGENTS §6 记第八坑；探针真实写 xlsx：slotTemplate/schedule/slot/registration/campus 五个 VO 全部 PASS | backend + docs 各一提交 |
+| 2026-10-20 | **S5 开发轮（查询聚合与余量缓存）**：A1–A7 公共查询组（院区 / 科室树按「该院区有出诊医务人员」剪枝 / 医生分页与主页（`favorited` 可选登录，未登录 false 不 401）/ 日期栏双模式 / 当日出诊医生 + 午别余量 / 可约时间点），D1 窗口统一取 `booking.window.days`，窗口外按无数据返回空集合；余量改「一次聚合」`GROUP BY schedule_id, period`；`RemainService` 读（MGET → 回源 → SETNX 回填 600s）写（`SlotStateService` afterCommit → Lua `EXISTS→INCRBY`，无键不创建，过期 0 增量）+ `appt.remain.cache=redis\|db` 开关；admin 排班页余量列；新增两个脚本（读压测 / 1000 次一致性） | backend + admin + docs 各一提交 |
+| 2026-10-20 | **S5 验收实测**：读压测 100 并发 ×1000 样本 ×3 轮 —— 单屏 SQL 冷启动 3 条 / 命中 2 条 / `db` 3.2 条（与医生数无关），`redis` p95 9.3ms、命中率 100%，`db` p95 10.6ms（差距 14%，落在波动内，默认保持 `redis`）；一致性 1000 次「挂号 → 超时关单回补」差值恒 0 + 删键不创建（`PASS=11 FAIL=0`）；回归 S3 `PASS=14`、S4 `PASS=21`；压测脚本修两处健壮性（跳过无人员的残留院区、`date +%s%N` 计时）与 token 兼容（`APPT_TOKEN` 或 `TOKEN`） | backend + docs 各一提交 |
+| 2026-10-20 | **S5 手工验收收口**：A1 封面 `coverImageUrl` 翻译（ossId → URL，直链数据回空串由前端 `\|\|` 兜底）、A3 分页与中文关键字、A4 匿名 200/不存在 404、A5 医生模式定长 7 项、A6 下单 48→47 与关单回 47→48、`remain=0` 午别仍返回、后台余量列与导出（无该列）全部通过；发现并修两处：① 缺必填参数/参数类型不合法由框架 500 收口为 **400**（`ApptExceptionHandler` 加两个 handler 并按 appt 包限定 + 最高优先级）；② `releaseToPool` CAS 未命中时**仍释放本单占位键**（Lua 比对 value），消除「DB 可约 + Redis 仍占用」的孤儿键导致的持续 `SLOT_GONE`；重启后复跑 `s4_payment.sh` 仍 `PASS=21 FAIL=0` | backend + docs 各一提交 |
 
 ---
 
@@ -242,6 +249,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
 | v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
 | v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
+| v0.4.4 | 2026-10-20 | **S5 实现与文档 + 验收实测**：`/appt/public` 落地 A1–A7（匿名）、余量一次聚合（`GROUP BY schedule_id, period`）+ `appt:remain:{scheduleId}:{period}` 缓存（MGET 批量读 / SETNX 回填 600s / afterCommit + Lua EXISTS 守卫 / 双模式开关）、D1 窗口过滤；技术方案 §3.2 验证数据回填（SQL 3/2/3.2 条、`redis` p95 9.3ms 命中率 100%、`db` p95 10.6ms、一致性差值 0）与默认值裁决；`test-evidence.md` 增 §7（含 S3/S4 回归、手工验收、参数 400 语义、占位键释放修复）；`script/test/README.md` 增两脚本前置与留档口径；admin 排班页余量列 |
 | v0.4.2 | 2026-10-20 | **S4 文档 + 文档对账**：契约 §5.1 补待签串/ack 结构/入账前置、§5.5 订正 `refund_no` 前缀为 F 与退款回调复用 `appt_payment_callback` 的字段映射；ROADMAP S4 完成与 ①②③④ 通过标记；技术方案 §1.4 补 `payment.refund.auto-enabled`/`max-retry`/`retry-backoff-seconds` 并去除重复行、§3.1/§3.3/§3.4/§3.5 验证数据回填；database-design §3.5 补退款回调复用说明；backend AGENTS §6 补三条坑位（JDT 与 javac 对非法字符差异 / MP 批量插入不参与外层事务 / `@Async` 默认无界执行器） |
 | v0.3.9 | 2026-10-19 | 图片字段 ossId 翻译：`image-upload` 回填 ossId（非 URL），VO 增 `avatarUrl` / `coverImageUrl` 并用 `@Translation(OSS_ID_TO_URL)` 翻译；列表 `xxxUrl || xxx` 兜底旧 URL 数据；导出不含图片列；AGENTS 前后端同步纠正"字段存 URL"的错误表述 |
 | v0.4.0 | 2026-10-19 | S2 前置收尾：`ApptSlotServiceImpl` 删除前校验有效挂号（`active_flag=1`），`ApptSlotTemplateServiceImpl` 删除前按 `(staff_id, period, clinic_type)` 校验是否已生成排班；ROADMAP S1 标记完成、`uk_patient_id_hash` 状态更正（随 `IdNoEncryptor` 已实现） |

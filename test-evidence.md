@@ -1,8 +1,8 @@
-# 测试证据（S2 / S3）
+# 测试证据（S2 – S5）
 
 > 目的：把「设计承诺」变成「可复核的数字」。每条 = 场景 → 复现命令 → 实测输出 → 结论。
 > 环境：backend `084fbe0`+（2026-10-20 本地），MySQL `appt`、Redis db1、患者账号 `appt_patient`、单机 50 并发。
-> 复现入口：`backend/script/test/s3_b1_concurrency.sh`（前置与取 token 见 `backend/script/test/README.md`）。
+> 复现入口：`backend/script/test/`（`s3_b1_concurrency.sh` / `s4_payment.sh` / `s5_read_bench.sh` / `s5_remain_consistency.sh`，前置与取 token 见同目录 `README.md`）。
 
 ---
 
@@ -133,3 +133,82 @@ SnailJob 控制台建 `apptPaymentCloseJob`（30 秒）后的实跑属人工验�
 1. 「一个号只能卖一次」是数据库事实，不是应用判断：Redis 占位 → DB 行级 CAS → 联合唯一索引，三道防线任何一道被摘掉，成交数仍然是 1。
 2. 幂等的目标是「让用户看到同一张单」，不是「拒绝重复」：同 key 第二次返回 200 + `duplicate=true`，DB 仍只有 1 单。
 3. 限购的第三条（同时持有 ≤3）没有索引可兜底，必须靠账号行 `FOR UPDATE` 把同一账号串行化——这是唯一索引解决不了的那一类并发。
+
+---
+
+## 7. S5 查询聚合与余量缓存（测试⑤）
+
+复现入口（两个脚本都不需要 token / 只有一个需要）：
+
+```bash
+# 读压测（全匿名）：redis / db 两模式各跑一次
+bash script/test/s5_read_bench.sh
+# 一致性（集成测试⑤）：需要患者 token
+APPT_TOKEN='<token>' bash script/test/s5_remain_consistency.sh
+```
+
+前置：后端已启、窗口内（今日+1 ~ 今日+7）有排班与可约号源；`appt.remain.cache` 切换后**必须重启后端**，
+且切换前留存的 `appt:remain:*` 键最长 600s 后自然过期（对比压测建议先等 TTL 或清空该命名空间）。
+
+### 7.1 单屏 SQL 次数
+
+`/appt/public/schedule/staffs?deptId=&date=` 的 SQL 由「逐医生逐午别 COUNT（M×2~3）」收敛为：
+① 当日正常排班 ② 医生资料批量 ③ 余量一次聚合（缓存命中时为 0 条）。
+
+实测（`s5_read_bench.sh`，`SHOW GLOBAL STATUS 'Questions'` 差值，20 次采样扣脚本自身 2 次 `SHOW`）：
+
+| 指标 | 通过标准 | 实测 |
+|---|---|---|
+| 单屏 SQL 次数（冷启动首屏） | ≤ 3 | **3**（排班 + 医生资料 + 余量聚合） |
+| 单屏 SQL 次数（缓存命中，10 次均值） | ≤ 3 | **2.2**（2 条 + 后台关单巡检噪声） |
+| 单屏 SQL 次数（`appt.remain.cache=db`） | ≤ 3 | **3.2**（多一条聚合，无缓存读） |
+| 朴素实现（对照） | — | 每格 1 次 COUNT：当前单屏 2 医生 / 2 格 → 2 次；20 医生 × 2~3 午别 → 40~60 次 |
+
+> 关键不变量：次数**与医生数无关**（缓存命中恒 2 条、冷启动恒 3 条），这才是 N+1 被消掉的证据。
+> 当前演示数据单屏只有 2 名医生（40 科室 / 60 医务人员摊到 7 天），密度不足；业务数据 seed 归 S7。
+
+### 7.2 延迟分位与两模式对比（100 并发读）
+
+100 并发 × 1000 样本 × 3 轮（单机 curl 进程开销计入，取中位）：
+
+| 模式 | 单屏医生数 | SQL 次数 | p50 | p95 | p99 | 命中率 | QPS |
+|---|---|---|---|---|---|---|---|
+| redis | 2 | 2.2 | 4.1 ms | 9.3 ms | 12.9 ms | 100.00% | ~1050 |
+| db | 2 | 3.2 | 4.0 ms | 10.6 ms | 19.0 ms | —（无缓存读） | ~1160 |
+
+> 通过标准：p95 < 100ms（两模式均达标，余量 10 倍以上）；命中率 ≥ 95%（redis 实测 100%）。
+> 两模式 p95 差距 14%，落在三轮波动区间内；默认值裁决理由见 `技术方案.md` §3.2 —— 默认保持 `redis`，`db` 作为可选对照。
+
+### 7.3 一致性（集成测试⑤）
+
+实测 `PASS=11 FAIL=0 SKIP=0`（`CYCLES=1000`，2026-10-20）：
+
+| 场景 | 期望 | 实测 |
+|---|---|---|
+| 连续 1000 次「挂号 → 超时关单回补」 | 缓存 vs DB 聚合差值 0 | 通过：每 200 次与结束时各比对一次，4 个键差值恒为 0 |
+| 键被删除后再挂号/回补 | 不创建键（Lua EXISTS 守卫，无幻数 1） | 通过：删键后完成一轮挂号/回补，键仍不存在 |
+| 窗口外日期 `/schedule/staffs` | `code=200` + 空集合 | 通过（今日+30） |
+| `/slot/list` 窗口内 | 只含 `AVAILABLE`、字段齐全（slotId/timePoint/fee） | 通过（48 个可约时刻） |
+| 参数缺失 / 类型不合法 | `code=400`（**不是 500**） | 通过：`dept/tree` 缺 campusId → `缺少必填参数[campusId]`；`staff/list` 缺 deptId → `缺少必填参数[deptId]`；`slot/list?scheduleId=abc` → `参数类型不合法` |
+| `remain=0` 的午别 | 仍然返回（前端置灰），不消失 | 通过：把该午别号源临时置占用后 `AM.remain=0` 且仍在 `periods` 里 |
+| 后台排班页余量列 | 与接口同值、0 值置灰、导出无该列 | 通过：下单后接口与页面同为 47，关单后同为 48；导出 xlsx 无「余量」列 |
+
+**本轮验证发现并修复（写路径鲁棒性）**：`releaseToPool` 在 CAS 未命中时**也释放本单占位键**。
+触发场景：号源被外部改动（本轮为手工「整午别 UPDATE」）后关单，CAS 未命中提前 return，导致
+`appt:slot:hold:{slotId}` 残留，下单持续 `SLOT_GONE` 直到占位 TTL 到期。Lua 比对 value，不会误删后来者的键。
+
+### 7.4 回归（写路径改动的影响面）
+
+`SlotStateService.occupy / releaseToPool` 接入了 afterCommit 余量增减，回归两个既有脚本：
+
+| 脚本 | 结果 |
+|---|---|
+| `s3_b1_concurrency.sh` | `PASS=14 FAIL=0 SKIP=0`（50 并发仍 1 成交、幂等、限购三条、窗口外） |
+| `s4_payment.sh` | `PASS=21 FAIL=0 SKIP=0`（回调 3 次仅 1 次入账、关单回补可再约、关单后回调自动退款、并发关单 1 次生效、验签） |
+
+> 2026-10-20 二次复跑：`releaseToPool` 占位键释放修复生效（重启后）再跑 `s4_payment.sh`，
+> 仍 `PASS=21 FAIL=0 SKIP=0` —— 该修复只影响 CAS 未命中的异常分支，正常关单链路无回归。
+
+**边界声明**：S5 只覆盖「占用（−1）/ 回补（+1）」两条写路径；`AVAILABLE→EXPIRED`（过期扫描）为 0 增量、
+`AVAILABLE→SUSPENDED`（停诊）为 −1，两个调用点分别在 S6a / S6b 接入**同一个** `RemainService`。
+`SlotGenerateService` 批量 insert 可约号源不产生脏值（新排班此前无键），仅「对已存在排班补号」可能滞后 ≤600s，属显示侧可接受。
