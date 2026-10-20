@@ -303,3 +303,50 @@ APPT_TOKEN='<appt_patient>' TRIAGE_TOKEN='<appt_triage>' ADMIN_TOKEN='<超管>' 
 - 停诊区间以 `scope_value` 编码（`起始~结束`），**一条登记一个批号**；原「按日拆 N 条共用批号」因 `UNIQUE(batch_no)` 不可实现，已废止。
 - `SUSPENDED` 号源不参与公开查询（A7 只返回 `AVAILABLE`），已被停诊的排班也不返回（A5/A6 过滤 `status='NORMAL'`）。
 - 分诊台模式（uni-app）延后，本轮只做 API 与后台处理按钮。
+
+---
+
+## 10. S7 七查对账与看板
+
+复现入口：
+
+```bash
+# 前置：后端为 S7 代码；已执行 appt_s6b_seed.sql / appt_s7_seed.sql / appt_s7_business_seed.sql
+ADMIN_TOKEN='<超管 token>' bash script/test/s7_reconcile.sh
+```
+
+### 10.1 七查（构造 → 修复 → 二次跑归零）
+
+| # | 构造方式 | 期望 | 实测 |
+|---|---|---|---|
+| R1 幽灵占号 | 取一个可约号源置 `TAKEN` 且 `registration_id=NULL` | 自动回池（`AVAILABLE` 或 `EXPIRED`）+ 台账 `RELEASE` | ✅ `slot …200111 → 可约` + `RELEASE` 台账 |
+| R2 号源未占用 | 把某 `BOOKED` 单的号源改回 `AVAILABLE` | 自动补占用（`TAKEN` + 回写 `registration_id`），余量 −1 | ✅ `slot …201411 → TAKEN/…300245` |
+| R3 应退未退 | 把某已支付单改成 `CANCELED_ACTIVE` 并删其退款单 | 自动建退款单 + `settle_status=WAIT_REFUND` + 渠道退款 | ✅ 自动补出退款单（单 `…300263`） |
+| R4 给了号没收钱 | 把某 `BOOKED` 单的支付单改成 `WAIT_PAY` | **只告警**（`action=ALERT`），支付单保持 `WAIT_PAY` | ✅ 落 `ALERT` 且支付单仍 `WAIT_PAY`（未被改） |
+| R5 退款卡住 | 插入一条 `update_time = now-1h` 的 `WAIT_REFUND` 退款单 | 重新发起渠道退款（状态转 `REFUNDED` 或仍在 `WAIT_REFUND`） | ✅ 重新发起（状态 `WAIT_REFUND`，Mock 回调后仍待入账） |
+| R6 停诊漏处理 | 把某 `BOOKED` 单的排班置 `SUSPENDED` | 补被动退号（`CANCELED_PASSIVE`）+ 号源 `SUSPENDED` + 退款/关单 + 站内信 | ✅ 该排班 8 条 `WAIT_PAY/BOOKED` 全部转 `CANCELED_PASSIVE` |
+| R7 缓存漂移 | 手写一个 `appt:remain:*` 键 | 命名空间被 `SCAN + UNLINK` 清空；**其它 Redis 键不受影响** | ✅ 余量键归零，占位键等其它键未受影响 |
+
+### 10.2 幂等与耗时
+
+| 指标 | 通过标准 | 实测（2026-10-21，`PASS=22 FAIL=0 SKIP=0`） |
+|---|---|---|
+| 一轮摘要 | 7 项各给出 found/fixed/alerted/skipped | 批次 `RC20261021000004`：**发现 14 / 修复 12 / 告警 2 / 跳过 0** |
+| 二次跑 | R1/R2/R3/R6 的 `found` 合计 = 0；R5 不重复重试 | ✅ 四项合计 0；R5 `found=1`（仍 `WAIT_REFUND`，重试属预期，脚本允许 ≤1） |
+| 耗时 | `elapsedMs < 60000`（seed 后 500 排班 / 9000 号源 / 2000 单） | ✅ **1774ms**（约 1.8s，预算 60s） |
+
+> 摘要「发现 14」= 7 项各 1 + **R6 连带清扫同排班的另外 7 条** `WAIT_PAY/BOOKED` 单。
+> R6 的判定粒度是**排班级**（停诊必须把该排班所有未就诊单退干净），属设计意图；因此对账脚本的造数
+> 必须让 R2/R3/R4/R6 落在**四个不同排班**（脚本已加自检：去重后必须为 4，否则中止提示先跑 seed）。
+
+### 10.3 看板与 seed
+
+| 项 | 期望 | 实测 |
+|---|---|---|
+| seed 规模 | 500 排班 / 9000 号源 / 2000 挂号单（8 状态齐全）/ 2000 支付单 / 360 退款单 | ✅ 2026-10-21 实跑（~45s）：`500 / 9000 / 2000 / 2000 / 360 / 620` |
+| seed 自洽 | `ghost_slots=0 && unoccupied=0`（首轮对账不误报） | ✅ 两项均为 0 |
+| 看板 7 指标 | 与 SQL 手算一致；科室 TOP5 按今日挂号数倒序 | ✅ 逐项核对：`todaySlots=9000`（SQL 9000）、`todayBooked=60`（60）、`todaySigned=0`（0）、`noShowRate=0.00`（0/180）、`cancelRate=0.00`、`paySuccessRate=74.00`（1480/2000）；TOP5 五个科室各 10 单 |
+| admin 看板页 | 卡片 + 柱图渲染、刷新不轮询、窄屏卡片折行 | 页面待点检（接口已实测一致；菜单 `数据看板` + `appt:dashboard:query` 已 seed） |
+
+> seed 会把有效单补到 620 张，为了满足 `uk_reg_patient_time` 必须把演示就诊人补到 **10 位**（PRD §6.5 单账号上限）；
+> 2 位就诊人时该约束决定的上限只有 288 张（实测卡在此处，已记入 ROADMAP S7 踩坑记录）。

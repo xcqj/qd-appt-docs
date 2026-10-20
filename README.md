@@ -56,3 +56,78 @@
 - **文档冲突时**：业务规则以 PRD 为准、实现手段以技术方案为准、字段以 database-design 为准、
   **排期与验收以 ROADMAP 为准**；冲突先报告，由最新明确决定裁决。
 - 本目录文件**不被 AI 工具自动加载**（项目一已验证）——关键约束必须落在各仓 `AGENTS.md`，这是红线要在建仓时落进各仓的原因。
+
+---
+
+## 启动与演示（2026-10-21，S7 交付）
+
+> 依赖容器编排（`docker-compose`）仍属工程基线 **E2** 待办；下面按「容器已就绪」写。
+> 演示数据全部虚构，仅 Mock 支付渠道，不提供任何医疗服务。
+
+### 0. 前置（容器）
+
+| 组件 | 用途 | 本地约定 |
+|---|---|---|
+| MySQL 8 | 业务库 `appt` | 容器 `blog-mysql`，账号 `root/root` |
+| Redis 7 | 占位键 / 余量缓存 / Sa-Token / 幂等键 | 容器 `blog-redis`，db `1`，密码 `ruoyi123` |
+| MinIO | 图片对象存储（院区封面 / 医生头像 `ossId`） | `127.0.0.1:9000` |
+| SnailJob 2.0.2 | 定时任务调度台（放号 / 关单 / 爽约 / 置完成 / 对账） | 控制台 `8800`，组 `ruoyi_group` |
+
+### 1. 建库并导入脚本（按顺序）
+
+```bash
+cd backend/script/sql
+mysql -uroot -proot appt < appt_schema.sql          # 表结构
+mysql -uroot -proot appt < appt_s1_seed.sql         # 基础数据（院区/科室/人员/收费标准/模板）
+mysql -uroot -proot appt < appt_s1_menus.sql        # 菜单与权限
+mysql -uroot -proot appt < appt_s3_patient_seed.sql # 联调账号 appt_patient + 就诊人
+mysql -uroot -proot appt < appt_s6a_seed.sql        # triage 角色/账号 + 签到权限
+mysql -uroot -proot appt < appt_s6b_seed.sql        # 停诊处理权限
+mysql -uroot -proot appt < appt_s7_seed.sql         # 看板菜单 + 对账/看板权限
+mysql -uroot -proot appt < appt_s7_business_seed.sql # 演示业务数据（500 排班 / 9000 号源 / 2000 单，约 45s）
+```
+
+> `appt_s7_business_seed.sql` 会**清空业务表**（挂号/支付/退款/台账/任务日志/对账结果/站内信/停诊登记/排班号源），
+> 保留基础数据、账号与就诊人；可重复执行。演示顺序：**先灌 seed，再跑对账/看板**（否则对账记录会被清掉）。
+
+### 2. 起后端
+
+```bash
+cd backend
+mvn -pl ruoyi-admin -am package -DskipTests
+java -jar ruoyi-admin/target/ruoyi-admin.jar          # 8082
+```
+
+自检：`curl -s http://127.0.0.1:8082/appt/public/campus/list` 应返回 3 个院区。
+
+### 3. 起管理后台
+
+```bash
+cd admin
+pnpm install
+pnpm dev                                              # 8083，dev 代理已指向 8082
+```
+
+超管登录 `admin`（密码见框架初始化脚本）。
+
+### 4. 演示入口
+
+| 角色 | 入口 | 能演示什么 |
+|---|---|---|
+| 匿名患者 | `GET /appt/public/**`（A1–A7） | 院区 / 科室树 / 医生 / 日期栏 / 当日出诊+余量 / 可约时间点 |
+| 患者 | `/appt/patient/**`（B1/B2/B3/B5） | 挂号（三道防线 + 限购 + 黑名单）→ 支付（Mock）→ 我的预约 → 退号（退款） |
+| 分诊 | `/appt/triage/**`（E1/E2/E5） | 扫码签到 / 手动补签 / 停诊上报 |
+| 后台 | 排班管理 / 停诊登记 / 挂号单 / 退款单 / 黑名单 / 任务日志 / **对账结果** / **数据看板** | 排班生成与余量、停诊两段式、手动退号、退款、黑名单解除、任务手动重跑、**七查对账**、**7 指标看板** |
+
+### 5. 验收脚本（`backend/script/test/`）
+
+| 脚本 | 覆盖 |
+|---|---|
+| `s3_b1_concurrency.sh` | 集成测试① 并发争抢 / 幂等 / 三条限购 |
+| `s4_payment.sh` | 集成测试②③ 关单回补 / 回调幂等 / 钱到了号没了 |
+| `s5_read_bench.sh`、`s5_remain_consistency.sh` | 单屏 SQL 次数与分位 / 集成测试⑤ 缓存一致性 |
+| `s6a_state_machine.sh` | 集成测试⑥ 退号 / 签到 / 爽约兜底 / 置完成 |
+| `s6b_suspend_blacklist.sh` | 停诊两段式与幂等 / 黑名单拦截 |
+| `s7_reconcile.sh` | 七查构造与修复 / 二次跑归零 / 耗时 |
+
+留档数字见 `test-evidence.md`（§3–§10）。

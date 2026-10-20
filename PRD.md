@@ -495,6 +495,12 @@ GET  /appt/admin/dashboard                        数据看板
 - **执行**：每日 03:00 定时执行；后台提供**手动触发 + 结果列表**（演示入口）
 - **原则**：能自动修复的自动修复；不能自动修复的**必须留下可人工处理的记录**，不允许静默丢弃
 
+> **实现口径（2026-10-21，S7）**：一轮对账生成批号 `RC + yyyyMMdd + 6 位`，异常**一行一记录**写入
+> `appt_reconcile_result`（`check_type` / `target_id` / `action` / `status` / `detail`）；
+> 七项独立 try/catch——某一查失败不影响其余六查，失败项在摘要里标注原因。
+> 修复边界：R1/R2/R3/R6/R7 自动修，R5 重试，**R4 只告警**（不改资金）；R3 排除已爽约、R6 排除已签到。
+> R7 只 `SCAN + UNLINK` 余量命名空间（`appt:remain:*`），**不 FLUSHDB**（Redis 还有 Sa-Token / 占位键 / 幂等键）。
+
 ### 9.7 可靠性
 
 - Redis 不可用时，号源争抢**降级为纯 DB CAS**（正确性不降，性能下降）
@@ -528,6 +534,19 @@ GET  /appt/admin/dashboard                        数据看板
 | 规则治理 | 黑名单管理 / 限购规则 / 就诊人管理 |
 | 运维对账 | 号源与支付对账（手动触发 + 结果） / 定时任务日志 |
 | 数据看板 | 今日放号 / 已预约 / 已签到 / 爽约率 / 退号率 / 支付成功率 / 科室 TOP5 |
+
+**看板口径（2026-10-21 写死，服务端唯一权威）**：
+
+| 指标 | 口径 |
+|---|---|
+| 今日 | `visit_date = CURDATE()` |
+| 今日放号 | `DATE(slot.create_time) = CURDATE()` 的号源数 |
+| 今日已预约 | 今日 `BOOKED + SIGNED + COMPLETED` |
+| 今日已签到 | 今日 `SIGNED + COMPLETED` |
+| 爽约率 | `NOSHOW / 今日挂号总量`（总量不排除任何终态） |
+| 退号率 | `(CANCELED_ACTIVE + CANCELED_PASSIVE) / 今日挂号总量` |
+| 支付成功率 | 今日创建支付单中 `PAID + REFUNDED` 占比 |
+| 科室 TOP5 | 今日挂号数按 `dept_id` 倒序取 5 |
 
 ---
 

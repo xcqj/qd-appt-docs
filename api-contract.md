@@ -1048,7 +1048,11 @@ POST /appt/admin/suspend/handle
 ### 8.5 其余管理端点——P1 占位
 
 - **F3 对账触发** `POST /appt/admin/reconcile/run`：`appt:reconcile:run`；同步执行、60 秒预算，返回 R1–R7 各查异常数摘要；明细走 F22 结果列表。若实测超时改异步，契约预留说明。
+  **响应（2026-10-21 落地）**：`{ batchNo（RC + yyyyMMdd + 6 位）, elapsedMs, message, checks: [{ checkType, found, fixed, alerted, skipped, summary }] }`；
+  异常明细落 `appt_reconcile_result`（一行一异常，同批共用 `batchNo`），F22 列表按 `batch_no` 过滤即可回查。
 - **F4 数据看板** `GET /appt/admin/dashboard`：`appt:dashboard:query`；今日放号 / 已预约 / 已签到 / 爽约率 / 退号率 / 支付成功率 / 科室 TOP5（PRD §10.2）。
+  **响应（2026-10-21 落地）**：`{ date, todaySlots, todayBooked, todaySigned, noShowRate, cancelRate, paySuccessRate, deptTop5: [{ deptId, deptName, count }] }`；
+  口径见 PRD §10.2「看板口径」表，**以服务端为准**，前端不得二次计算。
 - **F8–F22 编号分配**（字段级条目均在 S5–S7 联调前补；F16 / F22 编号已被 §11 待确认 #8 与 F3 条目引用，**锁定不变**；F15 / F21 / F23–F24 预留）：
   - F8 挂号单列表 / F9 挂号单详情（数据范围按 `user_id` 服务端强过滤，红线 10）
   - F10 手动退号（复用 B5 服务端逻辑）——2026-10-20 落地：`POST /appt/admin/registration/{id}/cancel`，权限 `appt:registration:cancel`，**不校验 23:00 截止**（人工兜底），状态记 `CANCELED_ACTIVE` 且计入黑名单统计
@@ -1056,7 +1060,7 @@ POST /appt/admin/suspend/handle
   - F13 支付单列表 / F14 退款单列表
   - F16 渠道配置（落业务表还是 `sys_config` 见 §11 待确认 #8）
   - F17 黑名单管理 / F18 限购规则 / F19 就诊人管理 / F20 任务日志
-  - F22 对账结果列表（F3 明细入口）
+  - F22 对账结果列表（F3 明细入口）：`GET /appt/admin/reconcileResult/list`，支持按 `batchNo` / `checkType` / `status` 过滤（列表列已含这三列；异常 `status=ALERT` 即人工队列）
 - **任务手动重跑（F20 扩展）** `POST /appt/admin/job/{jobName}/run`：`appt:job:run`；**白名单**任务名
   `apptNoShowJob`（爽约+过期扫描）/ `apptCompleteJob`（置完成）/ `apptPaymentCloseJob`（关单巡检）/ `apptReleaseJob`（放号）；
   同步返回 `jobName/batchNo/status/affectedRows/message`。与定时触发共用同一 Service，**同受 Redisson 互斥**：上一轮未结束时返回 `SKIPPED`。
