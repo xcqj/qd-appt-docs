@@ -421,7 +421,7 @@
 | id | bigint | PK | |
 | batch_no | varchar(32) | NOT NULL | 幂等锚点（I7） |
 | scope_type | varchar(16) | NOT NULL | `SCHEDULE` 单排班 / `STAFF_DATE` 某医生某日 / `CAMPUS_DATE` 院区某日（D-S1-5） |
-| scope_value | varchar(64) | NOT NULL | `SCHEDULE` 存 scheduleId；`STAFF_DATE` 存 visitDate；`CAMPUS_DATE` 存 `campusId:date`（D-S1-5） |
+| scope_value | varchar(64) | NOT NULL | `SCHEDULE` 存 scheduleId；`STAFF_DATE` 存 `yyyy-MM-dd[~yyyy-MM-dd]`；`CAMPUS_DATE` 存 `campusId:yyyy-MM-dd[~yyyy-MM-dd]`（D-S1-5）。**区间编码（2026-10-21，S6b）**：为避免改表，日期区间用 `~` 拼在同一个值里，由 F2 解析后按日展开；因 `UNIQUE(batch_no)` 存在，一条登记只对应一个批号（原「按日拆 N 条共用批号」作废） |
 | **staff_id** | bigint | | **医务人员 id**（D-S1-5；`SCHEDULE`/`STAFF_DATE` 必填，`CAMPUS_DATE` 为空）——F2 处理时要按 staff 定位 schedule，不能靠解析 `scope_value` 字符串 |
 | **reason** | varchar(255) | | **停诊原因**（契约 §7.5 E5；用于向受影响患者发站内信） |
 | **status** | varchar(16) | NOT NULL | **`PENDING` 待处理 / `HANDLED` 已处理**（契约 §8.4 停诊登记列表按此筛选；同一范围已存在 `PENDING` 时返回已登记批号，不重复建单） |

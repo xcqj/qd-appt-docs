@@ -37,7 +37,7 @@
 | **S4** | **支付链路**：支付单 + 渠道抽象 + 模拟渠道 + 回调幂等 + 超时关单与回补 | 交易链路闭环 | docs / backend | uni-app（**延后**） | ②③ | **已完成 2026-10-20** |
 | **S5** | 排班/医生查询接口 + 午别余量批量聚合 + 缓存 | 性能对比可演示 | docs / backend / admin | plus-ui：排班页余量 | ⑤ | **已完成 2026-10-20** |
 | **S6a** | 退号与退款、签到（分诊端扫码）、爽约扫描 | 状态机闭环（除停诊） | docs / backend / admin | uni-app（**延后**） | ⑥ | **已完成 2026-10-20** |
-| **S6b** | 停诊批量流转、黑名单、分诊台模式 | 批量操作不重不放 | docs / backend / admin | uni-app（**延后**） | — | 未开始 |
+| **S6b** | 停诊批量流转、黑名单、分诊台模式 | 批量操作不重不放 | docs / backend / admin | uni-app（**延后**） | — | **已完成 2026-10-21** |
 | **S7** | 对账（号源 + 支付）+ 台账 + 看板 + 业务数据 seed | **可交付**（= 本期结束） | docs / backend / admin | plus-ui：看板与对账页 | — | 未开始 |
 
 **集成测试**（定义见 PRD §12，此处绑定切片）：
@@ -116,8 +116,11 @@
 
 ### S6b 停诊批量与风控（处理 / 黑名单 / 分诊台）
 
-- [ ] 停诊**处理**（F2）：批量被动退号 + 退款 + 通知，批号 CAS 守卫、分批事务（≤100/批）；**复用** S6a 的 `RegistrationStateService`（被动退号），不另写状态 UPDATE；`RemainService` 接入 `AVAILABLE→SUSPENDED` **−1**
-- [ ] 黑名单（半年内退号+爽约 ≥6 → 限制半年）+ 限购校验接入；统计口径见 PRD §6.9 / 契约 §4.5：计入 `CANCELED_ACTIVE` + `NOSHOW`，不计 `CANCELED_PASSIVE` + `CLOSED`，按 `user_id` + `update_time` 近 180 天（**D-S6-1**）
+- [x] 停诊**处理**（F2）：批量被动退号 + 退款 + 通知，批号 CAS 守卫、分批事务（≤100/批）；**复用** S6a 的 `RegistrationStateService`（被动退号），不另写状态 UPDATE；`RemainService` 接入 `AVAILABLE→SUSPENDED` **−1** —— 2026-10-21：`SuspendHandleService`（Redisson 批号锁 + 每批一事务 + 完成后 CAS `PENDING→HANDLED`）、`markCanceledPassive`、`ScheduleStateService.markSuspended`、`SlotStateService.suspendAvailable/suspendTaken`；`WAIT_PAY` 单同步关支付单、已签到单跳过并在摘要计数
+- [x] 停诊**登记**（E5，S2 移入）：区间支持 + 同范围幂等 + S 前缀批号 —— 2026-10-21：`SuspendScopeParser` 把区间编码进 `scope_value`（一条登记一个批号，规避 `uk_suspend_batch` 与「拆 N 条」的冲突）；起止跨度 ≤31 天、起始日不早于今天
+- [x] 黑名单（半年内退号+爽约 ≥6 → 限制半年）+ 限购校验接入；统计口径见 PRD §6.9 / 契约 §4.5：计入 `CANCELED_ACTIVE` + `NOSHOW`，不计 `CANCELED_PASSIVE` + `CLOSED`，按 `user_id` + `update_time` 近 180 天（**D-S6-1**）—— 2026-10-21：`BlacklistService` 下单前惰性判定（账号行锁内计数，达阈值走 `REQUIRES_NEW` 独立事务建名单 + `BLACKLIST_HIT`，避免被外层回滚带走）；到期按 `end_time` 自然失效，人工解除沿用后台编辑 `status='1'`
+- [x] 站内信：`SUSPEND_CANCEL`（按账号聚合，一账号一条）+ `BLACKLIST_HIT` —— 页面「运维对账 → 站内信」可见「停诊取消 / 黑名单生效」两类
+- [x] 验收 2026-10-21：`s6b_suspend_blacklist.sh` `PASS=25 FAIL=0 SKIP=0`（登记幂等 / 处理 8 项 / 已签到跳过 / 余量 5→4 / 重复处理 / 黑名单拦截与建单）；后台「处理」按钮摘要「排班 1 / 号源 2 / 被动退号 1 / 退款 1 / 跳过已签到 1」，挂号单（已退号(被动)+停诊批号）、退款单、站内信、排班（已停诊）四处页面与接口一致；回归全绿：S6a `PASS=19 FAIL=0`、S4 `PASS=21 FAIL=0`、S3 `PASS=14 FAIL=0`（后者同时修了 `LIMIT_HOLD_MAX` 的选号脚本）
 - [ ] 分诊台模式（uni-app 同仓按角色切换，**延后**）
 
 ### S7 对账与交付
@@ -134,8 +137,8 @@
 |---|---|---|---|
 | `active_flag` NULL 语义 + `UNIQUE(slot_id, active_flag)` | S1（建）/ S3（用） | I1 实测：终态单共存、第二笔有效单报 1062 | ✅ |
 | 三道防线防超卖（Redis → DB CAS → 唯一索引） | S3 | 50 并发：1 成功 + 49 返回 1062/已被预约，`registration` 仅 1 行 `active_flag=1` | ✅ 2026-10-20 实测（1 成交 / 49 SLOT_GONE，`active_flag=1` 仅 1 行，payment 1 笔；**摘除防线① 对照组同样 1 成交**） |
-| 条件 CAS 即幂等 | S3 / S4 / S6a | 重复请求第二次 `affected rows = 0` | S3 号源 + S4 支付/退款/关单 + S6a 退号/签到/爽约/置完成 CAS 已落地 2026-10-20；停诊待 S6b |
-| 停诊两段式 + 批号幂等 | S6b（登记 + 处理） | 同一批号二次执行全部影响 0 行；登记按日拆分共用批号 | 未开始（登记 2026-10-19 由 S2 移入） |
+| 条件 CAS 即幂等 | S3 / S4 / S6a / S6b | 重复请求第二次 `affected rows = 0` | S3 号源 + S4 支付/退款/关单 + S6a 退号/签到/爽约/置完成 + S6b 停诊排班/号源/被动退号 CAS 全部落地（2026-10-20/21），停诊重复处理 `handled=false` 已实测 |
+| 停诊两段式 + 批号幂等 | S6b（登记 + 处理） | 同一批号二次执行全部影响 0 行 | ✅ 2026-10-21 实测（`s6b_suspend_blacklist.sh` `PASS=25 FAIL=0`）：E5 只登记不动数据、同范围 `duplicate=true`、F2 后登记 `HANDLED`、重复处理 `handled=false` 且退款单仍 1 条；后台页面点「处理」摘要「排班 1 / 号源 2 / 被动退号 1 / 退款 1 / 跳过已签到 1」，三处页面（挂号单/退款单/站内信）与接口一致。**区间停诊改「一条登记承载区间」**（原「按日拆分共用批号」与 `uk_suspend_batch` 唯一键冲突，已废止） |
 | 放号滚动窗口 D1（可配） | S2（任务侧）/ S5（查询侧） | 窗口外不可约；08:00 任务只生成「今日+N」 | ✅ 任务侧 2026-10-20 验收（只生成目标日、重跑 0 新增）；查询侧过滤归 S5 |
 | 余量聚合 M×2 → 1 + Lua EXISTS 守卫 | S5 | 单屏 1 次聚合 SQL + 压测对比表 | ✅ 2026-10-20 实测（单屏冷启动 3 条 / 命中 2 条，与医生数无关；`redis` p95 9.3ms 命中率 100% / `db` p95 10.6ms；1000 次挂号关单后差值 0，删键不创建） |
 | 回调幂等 + 「钱到了号没了」 | S4 | 回调 3 次仅 1 次入账；关单后回调 → 自动退款 + 告警 | ✅ 2026-10-20 实测（3 次投递回调记录仅 1 条、payment 仅 1 次 PAID；关单后回调 → refund REFUNDED、payment 保持 CLOSED） |
@@ -202,6 +205,8 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-20 | **S5 开发轮（查询聚合与余量缓存）**：A1–A7 公共查询组（院区 / 科室树按「该院区有出诊医务人员」剪枝 / 医生分页与主页（`favorited` 可选登录，未登录 false 不 401）/ 日期栏双模式 / 当日出诊医生 + 午别余量 / 可约时间点），D1 窗口统一取 `booking.window.days`，窗口外按无数据返回空集合；余量改「一次聚合」`GROUP BY schedule_id, period`；`RemainService` 读（MGET → 回源 → SETNX 回填 600s）写（`SlotStateService` afterCommit → Lua `EXISTS→INCRBY`，无键不创建，过期 0 增量）+ `appt.remain.cache=redis\|db` 开关；admin 排班页余量列；新增两个脚本（读压测 / 1000 次一致性） | backend + admin + docs 各一提交 |
 | 2026-10-20 | **S5 验收实测**：读压测 100 并发 ×1000 样本 ×3 轮 —— 单屏 SQL 冷启动 3 条 / 命中 2 条 / `db` 3.2 条（与医生数无关），`redis` p95 9.3ms、命中率 100%，`db` p95 10.6ms（差距 14%，落在波动内，默认保持 `redis`）；一致性 1000 次「挂号 → 超时关单回补」差值恒 0 + 删键不创建（`PASS=11 FAIL=0`）；回归 S3 `PASS=14`、S4 `PASS=21`；压测脚本修两处健壮性（跳过无人员的残留院区、`date +%s%N` 计时）与 token 兼容（`APPT_TOKEN` 或 `TOKEN`） | backend + docs 各一提交 |
 | 2026-10-20 | **S6a 开发轮（状态机闭环与售后链路）**：退号 B5（单柱 CAS + 回池 + 事务内建退款单 + 事务外渠道退款 + `CANCEL_SUCCESS` 站内信）、签到 E1/E2（`@SaCheckRole("triage")`，同一条状态边）、爽约+过期合并扫描（主批 + 全量兜底 + `NOSHOW_RECORD` 站内信 + `SlotStateService.expire` 余量 −1）、置完成 23:30、B2 我的预约列表 / B3 详情（就诊码、证件号脱敏）、后台手动退号 F10、任务手动重跑端点（白名单 4 任务）、`appt_s6a_seed.sql`（triage 角色/账号 + 两个按钮权限）、`s6a_state_machine.sh` | backend + admin + docs 各一提交 |
+| 2026-10-21 | **S6b 验收实测**：`s6b_suspend_blacklist.sh` `PASS=25 FAIL=0`（E5 登记与幂等 / F2 八项副作用 / 已签到跳过 / 余量 5→4 / 重复处理 `handled=false` / 黑名单拦截+建单+通知）；页面验收「停诊登记 → 处理」摘要与挂号单、退款单、站内信、排班四处一致；黑名单页显示 `system` 自动行、站内信 `BLACKLIST_HIT` 内容正确。**修脚本四处**：断言查错列（`appt_registration` 无 `registration_id`）、黑名单用例漏 `Idempotency-Key`、手工造数 SQL 误依赖已删除的临时排班、S3 的 `LIMIT_HOLD_MAX` 选号（原按「每科室首个号源」挑，候选全挤在同一天 08:00，去重后凑不满 3 笔；改为「科室 × 就诊日」组合后 `PASS=14`） | backend + docs 各一提交 |
+| 2026-10-21 | **S6b 开发轮（停诊批量与黑名单）**：E5 登记（区间编码 / 同范围幂等 / S 批号）+ F2 处理（批号锁、≤100/批、排班/号源停诊、被动退号、退款、WAIT_PAY 关单、已签到跳过、`SUSPEND_CANCEL` 通知）+ 黑名单惰性判定（账号行锁内计数、`REQUIRES_NEW` 建名单、`BLACKLIST_HIT`）+ 后台「处理」按钮 + `appt_s6b_seed.sql` + `s6b_suspend_blacklist.sh` | backend + admin + docs 各一提交 |
 | 2026-10-20 | **S6a 验收实测**：`s6a_state_machine.sh` `PASS=19 FAIL=0 SKIP=0`（退号 7 项含余量 −1 再 +1 / 截止 `REFUND_DEADLINE_PASSED` / 签到与重复签到 / 爽约主批 2 条 + 全量兜底 / 过期 `EXPIRE` / 置完成）；回归 S4 `PASS=21`、S3 `PASS=13 SKIP=1`（窗口外样本缺失，非回归）。脚本修两处：造数 SQL 误取 `appt_slot` 不存在的 `user_id/patient_id` 列、23 点后退号用例须取「今日+2」号源 | backend + docs 各一提交 |
 | 2026-10-20 | **S5 手工验收收口**：A1 封面 `coverImageUrl` 翻译（ossId → URL，直链数据回空串由前端 `\|\|` 兜底）、A3 分页与中文关键字、A4 匿名 200/不存在 404、A5 医生模式定长 7 项、A6 下单 48→47 与关单回 47→48、`remain=0` 午别仍返回、后台余量列与导出（无该列）全部通过；发现并修两处：① 缺必填参数/参数类型不合法由框架 500 收口为 **400**（`ApptExceptionHandler` 加两个 handler 并按 appt 包限定 + 最高优先级）；② `releaseToPool` CAS 未命中时**仍释放本单占位键**（Lua 比对 value），消除「DB 可约 + Redis 仍占用」的孤儿键导致的持续 `SLOT_GONE`；重启后复跑 `s4_payment.sh` 仍 `PASS=21 FAIL=0` | backend + docs 各一提交 |
 
@@ -260,6 +265,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
 | v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
 | v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
+| v0.4.7 | 2026-10-21 | **S6b 实现与文档**：契约 §7.5 改「一条登记承载区间（`endDate` + `scope_value` 编码）」并补 E5 响应字段、§8.3 补实现口径（批号锁 / `PENDING→HANDLED` / `TAKEN→SUSPENDED` 余量 0 / WAIT_PAY 关单 / 已签到跳过 / 通知聚合）；PRD §6.10 补区间承载与「已签到跳过」计数；database-design §3.2 补 `scope_value` 编码说明（不改表）；ROADMAP S6b 勾选 + §2 状态 + §3.9 停诊行修订 + §5 进度；新增 `appt_s6b_seed.sql`（`appt:suspend:handle`）与 `s6b_suspend_blacklist.sh`；**验收实测**：脚本 `PASS=25 FAIL=0`，页面「停诊登记 → 处理」与挂号单/退款单/站内信/排班四处一致，黑名单页自动行与 `BLACKLIST_HIT` 通知正确（`test-evidence.md` §9） |
 | v0.4.6 | 2026-10-20 | **S6a 实现与文档**：退号/签到/爽约/置完成四条状态边落 `RegistrationStateService`（全部显式 `update_time`）、`SlotStateService.expire`（余量 −1，与 `releaseToPool` 分离）、`RefundService` 拆 `createForPayment`/`dispatch` 并新增 `createPaidRefund`（PAID 入口）、`NoticeSender`、B2/B3 我的预约、后台手动退号 F10、任务手动重跑端点；契约 §4.5 补实现口径、§8.5 落 F10 与任务重跑；ROADMAP S6a 全项勾选 + §2 状态 + §3.9 两行 + §5 进度；新增 `appt_s6a_seed.sql` 与 `s6a_state_machine.sh` |
 | v0.4.5 | 2026-10-20 | **S6 口径决策（D-S6-1）**：① 停诊被动退号**不计入**黑名单；② 黑名单保留「退号 + 爽约」双计数（计入 `CANCELED_ACTIVE` + `NOSHOW`，不计 `CANCELED_PASSIVE` + `CLOSED`；按 `user_id`、`update_time` 近 180 天），理由见 PRD §6.9；③ 明确「23:00 后不可退号」是**不允许退**而非不计（该路径不存在，只落爽约）；④ 后台手动退号不受 23:00 限制但记 `CANCELED_ACTIVE` 且计入，避免绕过；⑤ ROADMAP S6a/S6b 补顺序说明（先 a 后 b）、`update_time` 显式写入坑位、`RemainService` 两处新接入点与 S6b `AVAILABLE→SUSPENDED −1`；⑥ 契约 §4.4 补「CLOSED 不计入」、§4.5 补截止语义与计数口径 |
 | v0.4.4 | 2026-10-20 | **S5 实现与文档 + 验收实测**：`/appt/public` 落地 A1–A7（匿名）、余量一次聚合（`GROUP BY schedule_id, period`）+ `appt:remain:{scheduleId}:{period}` 缓存（MGET 批量读 / SETNX 回填 600s / afterCommit + Lua EXISTS 守卫 / 双模式开关）、D1 窗口过滤；技术方案 §3.2 验证数据回填（SQL 3/2/3.2 条、`redis` p95 9.3ms 命中率 100%、`db` p95 10.6ms、一致性差值 0）与默认值裁决；`test-evidence.md` 增 §7（含 S3/S4 回归、手工验收、参数 400 语义、占位键释放修复）；`script/test/README.md` 增两脚本前置与留档口径；admin 排班页余量列 |

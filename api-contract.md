@@ -940,14 +940,17 @@ POST /appt/triage/suspend
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| staffId | 是 | 停诊对象医务人员 |
+| staffId | SCHEDULE / STAFF_DATE 必填 | 停诊对象医务人员；CAMPUS_DATE 为空（按院区，不绑人员） |
 | scopeType | 是 | `SCHEDULE` 单个午别 / `STAFF_DATE` 某医生某日 / `CAMPUS_DATE` 院区某日 |
-| scopeValue | 是 | SCHEDULE → scheduleId；STAFF_DATE → visitDate；CAMPUS_DATE → `campusId:date` |
+| scopeValue | 是 | SCHEDULE → scheduleId；STAFF_DATE → `yyyy-MM-dd`；CAMPUS_DATE → `campusId:yyyy-MM-dd`（也接受已带区间的写法） |
+| endDate | 否 | 结束就诊日（`yyyy-MM-dd`）；与 `scopeValue` 内的区间二选一，都带时以本字段为准。SCHEDULE 范围不允许传 |
 | reason | 是 | 停诊原因（进站内信通知患者） |
 
-**业务行为：** INSERT `appt_suspend_record`（`batch_no` 预生成，`operator = 当前账号`，`status = 待处理`）→ 返回批号。**本端点只登记、不执行退号**——执行是管理端 F2 的职责（两段式）。日期区间停诊按日拆分为 N 条 `STAFF_DATE` 登记，共用同一 `batch_no` 幂等归并（D-S1-5）。
+**业务行为：** INSERT `appt_suspend_record`（`batch_no` 预生成「S + yyyyMMdd + 6 位」，`operator = 当前账号`，`status = PENDING`）→ 返回 `suspendId / batchNo / status / duplicate / scopeValue`。**本端点只登记、不执行退号**——执行是管理端 F2 的职责（两段式）。
 
-**约束：** 同一范围存在未处理的登记时返回已登记批号，不重复建单。
+**日期区间（2026-10-21 修订）：** 一条登记承载一个范围，区间编码进 `scope_value`（`yyyy-MM-dd~yyyy-MM-dd`，CAMPUS_DATE 为 `campusId:起始~结束`），由 F2 按日展开；**不再按日拆 N 条**——表上 `uk_suspend_batch(batch_no)` 是唯一键，拆 N 条共用批号在 DDL 上不可实现。单次跨度上限 31 天，起始日不得早于今天。
+
+**约束：** 同一 `(scopeType, scopeValue)` 存在未处理登记时返回原批号（`duplicate=true`），不重复建单。
 
 ---
 
@@ -1025,6 +1028,14 @@ POST /appt/admin/suspend/handle
 
 **约束：** **已签到的单不参与批量退号**（患者已在院，现场人工协调；本期简化边界，PRD §6.10 / §14.3）。
 
+**实现口径（2026-10-21，S6b）：**
+
+- 幂等与并发：按 `batchNo` 加 Redisson 锁 `appt:lock:suspend:{batchNo}`，拿不到返回业务码 `SUSPEND_HANDLING`（不等待）；业务全部完成后才 CAS `PENDING→HANDLED`，中途失败登记保持 `PENDING` 可重试（各状态边都是条件 CAS，重跑不会重复退号/退款）。
+- 响应：`{ batchNo, handled, scheduleCount, slotCount, cancelCount, refundCount, skippedSigned, message }`；`handled=false` 表示登记早已处理，本次未做任何变更。
+- 号源口径：`AVAILABLE→SUSPENDED`（余量 −1）与 `TAKEN→SUSPENDED`（余量 **0**，并清空 `registration_id`）分属两个方法，不可合并；已签到单的号源保持 `TAKEN`。
+- 支付单：`PAID` → 建退款单（`settle_status=WAIT_REFUND`）后事务外走渠道退款；`WAIT_PAY` → 直接 CAS 关闭支付单，避免 30 秒关单巡检重复处理。
+- 通知：按账号聚合，每账号一条 `SUSPEND_CANCEL`（同一账号多张单只发一条）。
+
 ### 8.4 排班与号源查看（F5 / F6 / F7）
 
 | 端点 | 身份 | 说明 |
@@ -1061,10 +1072,11 @@ POST /appt/admin/suspend/handle
 | 状态边 | API 端点 | 定时任务 | 对账修复 |
 |---|---|---|---|
 | Slot `AVAILABLE→TAKEN` | B1 提交挂号 | — | R2 号源未占用 |
-| Slot `TAKEN→AVAILABLE` | B4 取消 / B5 退号 / F2 停诊处理（被动退号回池） | 关单巡检（30s） | R1 幽灵占号 |
+| Slot `TAKEN→AVAILABLE` | B4 取消 / B5 退号 | 关单巡检（30s） | R1 幽灵占号 |
 | Slot `AVAILABLE→EXPIRED` | — | 爽约/过期扫描（5min） | — |
 | Slot `TAKEN→EXPIRED` | B4 取消 / B5 退号（回池时 `time_point` 已过，红线 9） | 关单巡检（30s）回补时同上判定 | — |
-| Slot `AVAILABLE→SUSPENDED` | F2 停诊处理 | — | R6 停诊漏处理 |
+| Slot `AVAILABLE→SUSPENDED` | F2 停诊处理（余量 **−1**） | — | R6 停诊漏处理 |
+| Slot `TAKEN→SUSPENDED` | F2 停诊处理（被动退号后清占用，余量 **0**；**不回池**） | — | R6 停诊漏处理 |
 | Slot 新建 `AVAILABLE` | F1 排班生成 / E4 加号 | 放号任务（每日 08:00） | — |
 | Reg `WAIT_PAY→BOOKED` | C1 回调入账 | 巡检主动查单 | R4 告警（给了号没收钱） |
 | Reg `WAIT_PAY→CLOSED` | B4 / C2 TIMEOUT | 关单巡检 | — |

@@ -245,6 +245,61 @@ ADMIN_TOKEN='<超管 token>' \
 
 ### 8.2 边界声明
 
-- 本轮只做**主动**退号；`CANCELED_PASSIVE`（停诊被动退号）与黑名单策略归 S6b，届时复用同一 `RegistrationStateService`。
+- 本轮只做**主动**退号；`CANCELED_PASSIVE`（停诊被动退号）与黑名单策略归 S6b（已落地，见 §9），复用同一 `RegistrationStateService`。
 - 过期用例由 SQL 直插号源（绕过单柱），缓存与 DB 必然相差 1，因此只断言状态与台账；余量 −1 的口径由 `s5_remain_consistency.sh` 在真实链路上覆盖。
 - 任务用例经 `POST /appt/admin/job/{jobName}/run` 触发（白名单 + Redisson 互斥），与 SnailJob 定时触发走同一 Service。
+
+---
+
+## 9. S6b 停诊两段式与黑名单
+
+复现入口：`backend/script/test/s6b_suspend_blacklist.sh`
+（前置：`appt_s6a_seed.sql` 的 triage 账号 + `appt_s6b_seed.sql` 的 `appt:suspend:handle`）。
+
+```bash
+APPT_TOKEN='<appt_patient>' TRIAGE_TOKEN='<appt_triage>' ADMIN_TOKEN='<超管>' \
+  bash script/test/s6b_suspend_blacklist.sh
+```
+
+脚本自造一条独立排班（+20 天 NIGHT）+ 3 个号源（1 可约 / 1 已预约已支付 / 1 已签到），
+结束时连同黑名单行一起清理，不影响演示数据。
+
+### 9.1 两段式与副作用
+
+| 场景 | 期望 | 实测（2026-10-21，`PASS=25 FAIL=0 SKIP=0`） |
+|---|---|---|
+| E5 登记（SCHEDULE） | 登记行 `PENDING`、返回 S 批号、**排班未被改动** | ✅ `S20261021000003` + 排班仍 `NORMAL` |
+| 同范围重复登记 | `duplicate=true` 且返回原批号，不新建行 | ✅ 返回同 `suspendId` / 同批号 |
+| F2 处理 | 排班 `SUSPENDED`；可约号源 → `SUSPENDED`；已预约单 → `CANCELED_PASSIVE` + `cancel_type=PASSIVE` + 批号 + `active_flag=NULL`；已占号源 → `SUSPENDED` 且清占用；已支付 → 退款单；`SUSPEND_CANCEL` 站内信；登记 `HANDLED` | ✅ 摘要「排班 1 / 号源 2 / 被动退号 1 / 退款 1 / 跳过已签到 1」，8 项断言全通过；台账 `SUSPEND` 两条（可约 + 已占） |
+| 已签到单 | 仍 `SIGNED`、其号源仍 `TAKEN`（不参与批量退号） | ✅ 两项均通过 |
+| 余量口径 | 预置缓存 5 → 停诊 1 个可约号源后 4（−1）；已占号源 0 增量 | ✅ 5 → 4 |
+| 重复处理 | `handled=false`，退款单仍 1 条（不重复退款） | ✅ |
+| 被动退号不计黑名单 | 停诊前后「近 180 天 `CANCELED_ACTIVE`+`NOSHOW`」计数不变 | ✅ 停诊前后均 1 |
+
+**本轮发现并修复（脚本层，非业务缺陷）**：
+
+1. 断言查错列：`appt_registration` 没有 `registration_id`（那是 `appt_slot` 的列），SQL 报错被 `2>/dev/null` 吞掉后误判「已预约单未被动退号」；改为断言 `status + active_flag`。
+2. 黑名单用例下单未带 `Idempotency-Key`，被 B1 前置校验 400 拦下，根本没走到黑名单判定；补上请求头，并加兜底：若意外成交立即 `TIMEOUT` 关单回池。
+3. 手工验黑名单页面时，造数 SQL 原先 `JOIN` 依赖 3.4 已删除的临时排班 → 0 行插入；改为 `CROSS JOIN (SELECT ... FROM appt_schedule LIMIT 1)` + `slot_id=0`、`active_flag=NULL`（三条唯一索引均不冲突）。
+
+### 9.2 黑名单
+
+| 场景 | 期望 | 实测 |
+|---|---|---|
+| 近 180 天主动退号+爽约 ≥6 | 下单返回 `BLACKLISTED`；自动建名单（`status=0`，`end_time=+6 月`）；发 `BLACKLIST_HIT` 站内信 | ✅ 脚本 7 次 → `BLACKLISTED` + 名单行 + 通知；页面「规则治理 → 黑名单」显示 `operator=system`、原因「近 180 天退号与爽约累计 7 次」、失效日 2027-04-21 |
+| 生效期内再次下单 | 直接 `BLACKLISTED`，不再重复建名单 | ✅ 页面核对后再下单仍拒绝（`active_flag` 无新增） |
+| 到期/人工解除 | 按 `end_time` 自然失效；后台编辑 `status='1'` 人工解除（无新端点） | 人工解除未实测（页面表单可用，逻辑为读侧按 `status=0 AND end_time>=now` 判定） |
+
+> 回归（2026-10-21，S6b 改动后，均带三个 token 全量跑）：
+> `s6a_state_machine.sh` `PASS=19 FAIL=0 SKIP=0`（退号 / 截止 / 签到 / 爽约主批+兜底 / 过期 / 置完成，未被停诊与黑名单逻辑影响）、
+> `s4_payment.sh` `PASS=21 FAIL=0 SKIP=0`、`s3_b1_concurrency.sh` **`PASS=14 FAIL=0 SKIP=0`**。
+>
+> **S3 脚本修复（仅脚本，非业务）**：`LIMIT_HOLD_MAX` 长期 SKIP，根因在选号 SQL——「每科室取首个号源」会让候选全挤在同一天 08:00，
+> 按 `time_point` 去重后剩 1~2 个；改为「每科室 × 每个就诊日取首个号源」（≈280 个组合）后由 shell 贪心挑出
+> 时间点唯一 + 科室唯一的三笔，稳定通过。
+
+### 9.3 边界声明
+
+- 停诊区间以 `scope_value` 编码（`起始~结束`），**一条登记一个批号**；原「按日拆 N 条共用批号」因 `UNIQUE(batch_no)` 不可实现，已废止。
+- `SUSPENDED` 号源不参与公开查询（A7 只返回 `AVAILABLE`），已被停诊的排班也不返回（A5/A6 过滤 `status='NORMAL'`）。
+- 分诊台模式（uni-app）延后，本轮只做 API 与后台处理按钮。
