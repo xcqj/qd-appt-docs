@@ -101,14 +101,20 @@
 
 ### S6a 状态机闭环（退号 / 退款 / 签到 / 爽约）
 
+> **顺序（2026-10-20 定）**：先 S6a 后 S6b，不合并。S6b 的停诊处理 = 批量「被动退号 + 退款」，必须复用 S6a 的退号单柱；黑名单的计数来源（退号 / 爽约）也全在 S6a 产生。
+
 - [ ] 退号与退款（含 `settle_status` 流转）、签到（扫码 + 手动补签）、爽约扫描（半开窗口 + 全量兜底）
 - [ ] 6 种状态覆盖：`BOOKED→CANCELED_ACTIVE / SIGNED / NOSHOW`、`SIGNED→COMPLETED`
 - [ ] 集成测试 ⑥：某轮扫描被跳过，下一轮全量兜底不漏判
+- [ ] 退号时限语义：截止 `visit_date - 1 天 23:00:00`，`now < 截止` 才可退；截止后不提供该分支（PRD §6.7 / 契约 §4.5）
+- [ ] 状态流转**显式写 `update_time`**：黑名单按「状态流转时间近 180 天」统计，而 MyBatis-Plus 自动填充对 `update(null, wrapper)` **不生效**，不显式 `set` 就没有窗口基准（PRD §6.9）
+- [ ] `RemainService` 接入两个新调用点：退号回池 `TAKEN→AVAILABLE` **+1**、过期扫描 `AVAILABLE→EXPIRED` **−1**；`TAKEN→EXPIRED` 保持 0（技术方案 §3.2）
+- [ ] 后台手动退号（管理端）：不受 23:00 限制，状态记 `CANCELED_ACTIVE` 且**计入**黑名单统计（避免成为绕过口）
 
 ### S6b 停诊批量与风控（处理 / 黑名单 / 分诊台）
 
-- [ ] 停诊**处理**（F2）：批量被动退号 + 退款 + 通知，批号 CAS 守卫、分批事务（≤100/批）
-- [ ] 黑名单（半年内退号+爽约 ≥6 → 限制半年）+ 限购校验接入
+- [ ] 停诊**处理**（F2）：批量被动退号 + 退款 + 通知，批号 CAS 守卫、分批事务（≤100/批）；**复用** S6a 的 `RegistrationStateService`（被动退号），不另写状态 UPDATE；`RemainService` 接入 `AVAILABLE→SUSPENDED` **−1**
+- [ ] 黑名单（半年内退号+爽约 ≥6 → 限制半年）+ 限购校验接入；统计口径见 PRD §6.9 / 契约 §4.5：计入 `CANCELED_ACTIVE` + `NOSHOW`，不计 `CANCELED_PASSIVE` + `CLOSED`，按 `user_id` + `update_time` 近 180 天（**D-S6-1**）
 - [ ] 分诊台模式（uni-app 同仓按角色切换，**延后**）
 
 ### S7 对账与交付
@@ -249,6 +255,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
 | v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
 | v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
+| v0.4.5 | 2026-10-20 | **S6 口径决策（D-S6-1）**：① 停诊被动退号**不计入**黑名单；② 黑名单保留「退号 + 爽约」双计数（计入 `CANCELED_ACTIVE` + `NOSHOW`，不计 `CANCELED_PASSIVE` + `CLOSED`；按 `user_id`、`update_time` 近 180 天），理由见 PRD §6.9；③ 明确「23:00 后不可退号」是**不允许退**而非不计（该路径不存在，只落爽约）；④ 后台手动退号不受 23:00 限制但记 `CANCELED_ACTIVE` 且计入，避免绕过；⑤ ROADMAP S6a/S6b 补顺序说明（先 a 后 b）、`update_time` 显式写入坑位、`RemainService` 两处新接入点与 S6b `AVAILABLE→SUSPENDED −1`；⑥ 契约 §4.4 补「CLOSED 不计入」、§4.5 补截止语义与计数口径 |
 | v0.4.4 | 2026-10-20 | **S5 实现与文档 + 验收实测**：`/appt/public` 落地 A1–A7（匿名）、余量一次聚合（`GROUP BY schedule_id, period`）+ `appt:remain:{scheduleId}:{period}` 缓存（MGET 批量读 / SETNX 回填 600s / afterCommit + Lua EXISTS 守卫 / 双模式开关）、D1 窗口过滤；技术方案 §3.2 验证数据回填（SQL 3/2/3.2 条、`redis` p95 9.3ms 命中率 100%、`db` p95 10.6ms、一致性差值 0）与默认值裁决；`test-evidence.md` 增 §7（含 S3/S4 回归、手工验收、参数 400 语义、占位键释放修复）；`script/test/README.md` 增两脚本前置与留档口径；admin 排班页余量列 |
 | v0.4.2 | 2026-10-20 | **S4 文档 + 文档对账**：契约 §5.1 补待签串/ack 结构/入账前置、§5.5 订正 `refund_no` 前缀为 F 与退款回调复用 `appt_payment_callback` 的字段映射；ROADMAP S4 完成与 ①②③④ 通过标记；技术方案 §1.4 补 `payment.refund.auto-enabled`/`max-retry`/`retry-backoff-seconds` 并去除重复行、§3.1/§3.3/§3.4/§3.5 验证数据回填；database-design §3.5 补退款回调复用说明；backend AGENTS §6 补三条坑位（JDT 与 javac 对非法字符差异 / MP 批量插入不参与外层事务 / `@Async` 默认无界执行器） |
 | v0.3.9 | 2026-10-19 | 图片字段 ossId 翻译：`image-upload` 回填 ossId（非 URL），VO 增 `avatarUrl` / `coverImageUrl` 并用 `@Translation(OSS_ID_TO_URL)` 翻译；列表 `xxxUrl || xxx` 兜底旧 URL 数据；导出不含图片列；AGENTS 前后端同步纠正"字段存 URL"的错误表述 |

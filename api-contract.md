@@ -524,6 +524,8 @@ POST /appt/patient/payment/{paymentNo}/cancel
 
 **业务行为：** 与超时关单同一事务形状（技术方案 §3.4）：三步 CAS 均以 `WAIT_PAY` 为条件（重复触发第二次全部影响 0 行）+ 台账 + afterCommit 余量 +1 + 关单站内信。**不涉及退款**（未发生支付）。
 
+**约束：** 终态为 `CLOSED`，与超时关单同属「未发生支付」，**不计入**黑名单统计口径（PRD §6.9 不计入集合）。
+
 ### 4.5 退号（B5）
 
 ```http
@@ -546,6 +548,9 @@ POST /appt/patient/registration/{id}/cancel
 
 - 主动退号**计入**黑名单统计口径（半年内退号 + 爽约合计，PRD §6.9）；停诊被动退号不计入。
 - 爽约由扫描判定（PRD §6.8），不经过本端点。
+- **退号时限语义**：截止时刻为 `visit_date - 1 天 23:00:00`，判断 `now < 截止` 才可退；截止后**不提供**该分支（返回 `REFUND_DEADLINE_PASSED`），患者只能落到爽约。因此不存在「截止后靠不退号躲计数」的路径（PRD §6.9）。
+- **计数口径（D-S6-1）**：计入 `CANCELED_ACTIVE` + `NOSHOW`，不计 `CANCELED_PASSIVE` + `CLOSED`；按 `user_id`、以状态流转时间（`update_time`）落在近 180 天为准。
+- **后台手动退号**（管理端 F 系列，S6a 落）：不受 23:00 限制（人工兜底），状态记 `CANCELED_ACTIVE` 且**计入**统计，避免成为绕开黑名单的后门。
 
 ### 4.6 就诊人列表（B6）
 
