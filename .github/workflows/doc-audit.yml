@@ -1,0 +1,21 @@
+# 号源 QueueDepth · 文档一致性门禁（E3 延伸）
+#
+# docs 仓单独跑时没有 ../backend（enum 审计会降级为 WARN，不会失败）；
+# 若要连字典审计一起跑，在本地父目录（含 backend 与 docs）执行 `python3 docs/script/doc_audit.py`。
+name: doc-audit
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run doc audit
+        run: python3 script/doc_audit.py
