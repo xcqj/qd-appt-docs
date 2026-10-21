@@ -129,9 +129,10 @@
 5. 唯一键：`appt_clinic_type(code)`、`appt_slot_template(staff_id, period, clinic_type)`、`appt_fee_standard(title, clinic_type)`、`appt_staff_favorite(user_id, staff_id)`、`appt_patient(id_type, id_no_hash)`、`appt_schedule(staff_id, visit_date, period)`、`appt_slot(schedule_id, time_point)`、**`appt_registration(slot_id, active_flag)` 联合唯一索引**（active_flag=1 有效挂号、终态置 NULL——MySQL 唯一索引中 NULL 互不冲突，号源回池复用天然成立；一个号最多一笔有效挂号，最终兜底）、`appt_payment(payment_no)`、`appt_refund(refund_no)`。限购复合规则同法：`UNIQUE(patient_id, dept_id, visit_date, active_flag)`、`UNIQUE(patient_id, time_point, active_flag)`。全量索引以 `database-design.md` §4 索引总表为准。
 6. 就诊人身份：身份证号全局唯一，就诊卡号院内唯一；同一证件只能归属一个账号。
 
-> **实现进度（2026-10-21）**：就诊人管理（B6–B10：列表 / 新增 / 修改 / 删除 / 设默认）**尚未实现**，
-> 已排为 **S9**——它是 E5（uni-app）的最后一个后端硬前置：B1 挂号必须传 `patientId`，
-> 没有就诊人管理前端连"选就诊人"这一步都走不通。
+> **实现进度（2026-10-22，S9 已落地）**：B6–B10 五个端点全部实现（`/appt/patient/patient/**`）——列表只返回正常状态且默认排前、
+> 新增按 10 人上限与证件查重（`id_no_hash`）、修改支持「证件号留空=不改」、删除在有有效预约时返回 `PATIENT_IN_USE`、
+> 设默认走「同事务先清后设」并由 `UNIQUE(user_id, is_default)` 兜底。
+> **删除默认就诊人不自动转移默认**（由前端提示用户重选），避免系统替用户做有风险的决定。
 7. **PII**：就诊人证件号（`id_no`）属个人敏感信息——演示数据虚构可明文存储，代码预留列加密接口位（AES/GM），生产必须加密存储 + 脱敏展示；日志禁止打印证件号。**加密与唯一性共存靠 `id_no_hash`**（S1 D-S1-3）：随机 IV 的 AES 密文无法建唯一索引、无法等值查询，故增存 HMAC-SHA256 确定性摘要，**唯一性校验与检索一律走 hash，密文列只用于脱敏展示**——否则约束 6（证件号唯一）与本条（加密存储）互斥。
 
 ---

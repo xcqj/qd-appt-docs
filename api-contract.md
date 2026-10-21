@@ -1,7 +1,7 @@
 # 号源 QueueDepth · API 契约
 
-> 文档状态：v0.1（2026-10-17 定稿）：四层契约全量；P0 端点已全部落地，**剩余 P1 条目**（B8–B10 / C4 / E4 / F8–F30）待对应切片联调前补，占位见 §10。
-> **落地进度（2026-10-21）**：D1–D6（§6）、E3（§7.3）、F3/F4（§8.5）已转字段级；**B8–B10（§4.8）归 S9**，C4 退款查询与 E4 加号登记仍占位。
+> 文档状态：v0.1（2026-10-17 定稿）：四层契约全量；P0 端点已全部落地，**剩余 P1 条目**（C4 / E4 / F8–F30）待对应切片联调前补，占位见 §10。
+> **落地进度（2026-10-21）**：D1–D6（§6）、E3（§7.3）、F3/F4（§8.5）已转字段级；B8–B10（§4.8）已于 S9 落地；C4 退款查询与 E4 加号登记仍占位。
 > 用途：作为 `appt` 模块后端 API 的业务契约，供开发、Review、测试和 AI Agent 实现时使用。
 >
 > 本文定义接口契约与业务语义，不规定具体 Java 类名、RuoYi 返回包装类型、MyBatis-Plus 调用方式、异常类等实现细节。实现时以当前 RuoYi-Vue-Plus 源码中的真实模式为准。
@@ -79,6 +79,8 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 | `SIGN_WINDOW_CLOSED` | 已过爽约判定点或该单已签到 | §7 E1 |
 | `EXTRA_SLOT_INVALID` | 加号目标午别不存在或已停诊 | §7 E4 |
 | `PATIENT_LIMIT_EXCEEDED` | 就诊人已达 10 人上限 | §4 B7 |
+| `PATIENT_IN_USE` | 该就诊人仍有未使用的有效预约，拒绝删除 | §4 B9 |
+| `PATIENT_ID_CONFLICT` | 证件号已被绑定（本人或他人，**不区分归属**） | §4 B7 / B8 |
 
 > B1（提交挂号）集中了 8 个码：限购三条 + 黑名单 + 号源争抢的失败面全在该端点，前端必须按码分支渲染文案（"已被抢" / "您已有 3 单待就诊" / "黑名单期"）——这是错误码进契约而非留在实现层的原因。
 
@@ -564,7 +566,16 @@ GET /appt/patient/patient/list
 
 **身份：** 登录。
 
-**返回至少：** `patientId / name / idType / idNoMasked / isDefault`，按 `is_default` 倒序 + 创建时间排序。
+**响应（2026-10-22 字段级，S9）**：`{ id, name, idType, idNoMasked, isDefault, status, createTime }`
+
+| 字段 | 说明 |
+|---|---|
+| id | 就诊人 id（雪花，**字符串**） |
+| idType | `IDCARD` 身份证 / `CARD` 就诊卡 |
+| idNoMasked | 脱敏证件号 `3701**********1234`；**永不下发完整证件号与 id_no_hash** |
+| isDefault | 是否默认（库内 1/NULL，对外布尔） |
+
+**排序**：`is_default DESC, create_time DESC, id DESC`。
 
 **过滤（2026-10-18 补）**：**仅返回 `status = '0'`（正常）的就诊人**，`status = '1'`（停用）的不返回。
 后台管理端（F 系列）列表**不加此过滤**——否则停用后从后台也看不见，无法恢复。
@@ -601,7 +612,12 @@ POST /appt/patient/patient
 
 **约束：** `idNo` 禁止进日志（红线 15）；存储按技术方案 M11 预留加密位。
 
-### 4.8 修改 / 删除 / 设默认就诊人（B8–B10）——**归 S9，字段级条目随该切片补**
+**响应（2026-10-22，S9）**：返回新建就诊人的视图对象（同上表字段），`id` 供后续挂号使用。
+**实现口径**：`idNo` 经 `IdNoEncryptor.encrypt` 落库（演示期 `encrypt=false` 为明文），
+`id_no_hash = HMAC-SHA256(idNo)` 用于查重与 `UNIQUE(id_type, id_no_hash)` 兜底；
+查重命中**不区分本人还是他人**，统一 `PATIENT_ID_CONFLICT`（避免被用来探测他人信息）。
+
+### 4.8 修改 / 删除 / 设默认就诊人（B8–B10）——2026-10-22 已落地（S9）
 
 | 端点 | 身份 | 说明 |
 |---|---|---|
@@ -610,6 +626,14 @@ POST /appt/patient/patient
 | `PUT /appt/patient/patient/{id}/default` | 登录 | 设默认；已是默认再调仍成功（幂等）；同事务只保留一条 `is_default=1`（唯一键 `(user_id, is_default)` 兜底） |
 
 **共同约束**：单账号 ≤10 人（`PATIENT_LIMIT_EXCEEDED`）；证件号不进日志；`id_no` 密文、`id_no_hash` 查重（D-S1-3）。
+
+**实现口径（2026-10-22，S9）**
+
+- **修改**：`idNo` 留空 = 不修改；非空则重算 `id_no_hash` 并查重（排除自身）；只改 `idType` 不传证件号 → 400（类型与摘要必须成对变更，否则唯一键语义错位）。
+- **删除**：`active_flag=1` 存在（等价 `WAIT_PAY/BOOKED/SIGNED`）→ `PATIENT_IN_USE`；物理删除（表无 `del_flag`，改软删会破坏「命中停用行则复用」的语义）。
+- **设默认**：`UNIQUE(user_id, is_default)` + 同事务「先清后设」；已是默认再调仍成功（幂等）；**删除默认就诊人不自动转移默认**，由前端提示用户重选。
+- **属主隔离**：所有读写带 `user_id`，查不到一律 **404**（不区分「不存在」与「不是你的」）。
+- **软上限**：10 人按 `status='0'` 计数，count-then-insert 在极端并发下可能超出，属已知软约束。
 
 `PUT /appt/patient/patient/{id}`、`DELETE /appt/patient/patient/{id}`、`PUT /appt/patient/patient/{id}/default`：登录；数据范围按 `user_id`；删除约束（名下有挂号单的就诊人禁止删除）与字段语义在 S3 前端联调前补条目。
 
@@ -1196,9 +1220,9 @@ POST /appt/admin/suspend/handle
 | 预约详情 | GET | `/appt/patient/registration/{id}` | 登录 | — |
 | 待支付取消 | POST | `/appt/patient/payment/{paymentNo}/cancel` | 登录 | Payment / Reg `→CLOSED`；Slot 回补 |
 | 退号 | POST | `/appt/patient/registration/{id}/cancel` | 登录 | Reg `→CANCELED_ACTIVE`；Slot 回池；退款单新建 |
-| 就诊人列表 | GET | `/appt/patient/patient/list` | 登录 | —（**待实现：S9**） |
-| 新增就诊人 | POST | `/appt/patient/patient` | 登录 | — （**待实现：S9**） |
-| 修改/删除/设默认就诊人 | PUT/DELETE/PUT | `/appt/patient/patient/{id}`、`/{id}/default` | 登录 | — （**待实现：S9**） |
+| 就诊人列表 | GET | `/appt/patient/patient/list` | 登录 | — |
+| 新增就诊人 | POST | `/appt/patient/patient` | 登录 | —  |
+| 修改/删除/设默认就诊人 | PUT/DELETE/PUT | `/appt/patient/patient/{id}`、`/{id}/default` | 登录 | —  |
 | 渠道回调 | POST | `/appt/public/payment/callback/{channel}` | 匿名（验签） | Payment `→PAID`；Reg `→BOOKED` |
 | 模拟支付 | POST | `/appt/patient/payment/{paymentNo}/mock-pay` | 登录 | 同 C1 / FAIL 无流转 / TIMEOUT 走关单 |
 | 支付状态查询 | GET | `/appt/patient/payment/{paymentNo}` | 登录 | — |

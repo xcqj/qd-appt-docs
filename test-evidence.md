@@ -397,3 +397,36 @@ APPT_TOKEN='<appt_patient>' TRIAGE_TOKEN='<appt_triage>' bash script/test/s8_pat
 
 - E3 本期**不按在岗院区过滤**（`sys_user` 无院区字段，契约 §11 #7 未决）；`appt_registration` 无 `visit_date` 单列索引，当前 2000 行量级可接受，正式环境建议补 `(visit_date, campus_id)`（DDL 不在本期）。
 - 消息读侧不做「一键全部已读」（契约未定义），推送/微信订阅消息本期不做。
+
+---
+
+## 12. S9 就诊人管理（B6–B10）
+
+复现入口：`backend/script/test/s9_patient_crud.sh`（前置：患者账号 token，无需新 seed）
+
+```bash
+APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
+```
+
+### 12.1 实测（2026-10-22，`PASS=23 FAIL=0 SKIP=0`）
+
+| 组 | 用例 | 期望 | 实测 |
+|---|---|---|---|
+| B6 列表 | 返回体结构 | 只有 `idNoMasked`，无 `idNo` / `idNoHash` | ✅ |
+| B7 新增 | 带 `isDefault=true` | 成功；`id_no_hash` 64 位；本人默认仅 1 位 | ✅ 三项 |
+| | 响应 | 仅脱敏证件号 | ✅ |
+| B7 查重 | 同一证件号再建 | `PATIENT_ID_CONFLICT` | ✅ |
+| B8 修改 | `idNo` 留空 | 成功且 hash 不变 | ✅ |
+| | 换证件号 | 成功且 hash 重算 | ✅ |
+| 越权 | 改/删他人就诊人 | **404**（非 403） | ✅ 两项 |
+| B9 删除 | 该就诊人有 `active_flag=1` 单 | `PATIENT_IN_USE` | ✅ |
+| B7 上限 | 补到 10 人后再建第 11 位 | `PATIENT_LIMIT_EXCEEDED` | ✅ |
+| B10 设默认 | 连续两次 | 均成功（幂等）；默认仅 1 位且指向目标 | ✅ 三项 |
+| 清理 | — | 剩余正常就诊人回到基线 2 位 | ✅ |
+
+### 12.2 边界声明
+
+- **演示期证件号明文**（`appt.security.id-no.encrypt=false`）：脚本不断言密文，只断言「hash 为 64 位十六进制」与「响应不含原文」；生产打开加密开关无需改代码。
+- **10 人是软上限**：count-then-insert，极端并发可能超出 1~2 人；单账号正常操作不会触发。
+- **删除不转移默认**：删掉默认就诊人后账号可暂时没有默认，由前端提示用户重选。
+- **仅报告未修**：生成器侧的 `ApptPatientServiceImpl.insertByBo` 用 `Boolean.TRUE.equals(status)` 判「已存在启用行」，而 RuoYi `'0'`（正常）映射为 `false`，语义相反；患者侧实现按正确语义，后台那份建议单开修复项。
