@@ -1,6 +1,7 @@
 # 号源 QueueDepth · API 契约
 
-> 文档状态：v0.1（2026-10-17 定稿）：四层契约全量；P1 端点条目（B8–B10 / C4 / D1–D6 / E3 / F3–F4 / F8–F30）待对应切片联调前补，占位见 §10
+> 文档状态：v0.1（2026-10-17 定稿）：四层契约全量；P0 端点已全部落地，**剩余 P1 条目**（B8–B10 / C4 / E4 / F8–F30）待对应切片联调前补，占位见 §10。
+> **落地进度（2026-10-21）**：D1–D6（§6）、E3（§7.3）、F3/F4（§8.5）已转字段级；**B8–B10（§4.8）归 S9**，C4 退款查询与 E4 加号登记仍占位。
 > 用途：作为 `appt` 模块后端 API 的业务契约，供开发、Review、测试和 AI Agent 实现时使用。
 >
 > 本文定义接口契约与业务语义，不规定具体 Java 类名、RuoYi 返回包装类型、MyBatis-Plus 调用方式、异常类等实现细节。实现时以当前 RuoYi-Vue-Plus 源码中的真实模式为准。
@@ -559,6 +560,8 @@ POST /appt/patient/registration/{id}/cancel
 GET /appt/patient/patient/list
 ```
 
+> **实现状态（2026-10-21）**：契约已定，**后端未实现**（此前只有后台 `/appt/admin/patient`）→ 由 **S9** 落地。
+
 **身份：** 登录。
 
 **返回至少：** `patientId / name / idType / idNoMasked / isDefault`，按 `is_default` 倒序 + 创建时间排序。
@@ -571,6 +574,8 @@ GET /appt/patient/patient/list
 ```http
 POST /appt/patient/patient
 ```
+
+> **实现状态（2026-10-21）**：契约已定，**后端未实现** → 由 **S9** 落地（证件号走 `IdNoEncryptor`，唯一性走 `id_no_hash`）。
 
 **身份：** 登录。
 
@@ -596,7 +601,15 @@ POST /appt/patient/patient
 
 **约束：** `idNo` 禁止进日志（红线 15）；存储按技术方案 M11 预留加密位。
 
-### 4.8 修改 / 删除 / 设默认就诊人（B8–B10）——P1 占位
+### 4.8 修改 / 删除 / 设默认就诊人（B8–B10）——**归 S9，字段级条目随该切片补**
+
+| 端点 | 身份 | 说明 |
+|---|---|---|
+| `PUT /appt/patient/patient/{id}` | 登录 | 修改姓名/证件/是否默认；属主校验，非本人按 **404**（不泄露存在性） |
+| `DELETE /appt/patient/patient/{id}` | 登录 | 删除；**存在有效预约（`WAIT_PAY/BOOKED/SIGNED`）时拒删**，返回 `PATIENT_IN_USE` |
+| `PUT /appt/patient/patient/{id}/default` | 登录 | 设默认；已是默认再调仍成功（幂等）；同事务只保留一条 `is_default=1`（唯一键 `(user_id, is_default)` 兜底） |
+
+**共同约束**：单账号 ≤10 人（`PATIENT_LIMIT_EXCEEDED`）；证件号不进日志；`id_no` 密文、`id_no_hash` 查重（D-S1-3）。
 
 `PUT /appt/patient/patient/{id}`、`DELETE /appt/patient/patient/{id}`、`PUT /appt/patient/patient/{id}/default`：登录；数据范围按 `user_id`；删除约束（名下有挂号单的就诊人禁止删除）与字段语义在 S3 前端联调前补条目。
 
@@ -809,18 +822,51 @@ POST /appt/public/refund/callback/{channel}
 
 ---
 
-## 6. 患者辅助组 `/appt/patient/**`（D1–D6）——v0.1 简条
+## 6. 患者辅助组 `/appt/patient/**`（D1–D6：收藏与消息）
 
-| 端点 | 身份 | 说明 |
+> 组首：全部 `@SaCheckLogin`；服务端一律以**登录态 userId** 过滤，不接受前端传入的账号标识（红线 10）。
+> 2026-10-21（S8）从 v0.1 简条升级为字段级。
+
+### 6.1 我的医生（D1）`GET /appt/patient/favorite/list`
+
+| 参数 | 必填 | 说明 |
 |---|---|---|
-| GET `/appt/patient/favorite/list` | 登录 | 我的医生（收藏列表），返回 staffId + 基本信息 + 收藏时间 |
-| POST `/appt/patient/favorite/{staffId}` | 登录 | 收藏；重复收藏幂等（`UNIQUE(user_id, staff_id)`） |
-| DELETE `/appt/patient/favorite/{staffId}` | 登录 | 取消收藏 |
-| GET `/appt/patient/notice/list` | 登录 | 消息列表，分页，按时间倒序 |
-| GET `/appt/patient/notice/unread-count` | 登录 | 未读数（tab 红点） |
-| PUT `/appt/patient/notice/{id}/read` | 登录 | 标记已读；仅本人消息 |
+| pageNum / pageSize | 否 | 默认 1 / 20 |
 
-> 通知场景七种（PRD §6.12）：挂号成功（待支付）/ 支付成功 / 超时关单 / 退号成功 / 停诊取消 / 爽约记录 / 黑名单生效。`notice.type` 线值在 S6 补条目时定义。字段级条目在 S5 / S6 前端联调前补。
+**响应**：`PageResult<FavoriteStaffVo>`，`rows[]` 字段：`staffId / name / avatar / avatarUrl / title / degree / clinicType / deptName / campusName / favoriteTime`。
+**排序**：收藏时间倒序（`appt_staff_favorite.create_time`，不是医生创建时间）。
+**约束**：一页最多 3 次查询（收藏行 → 医生 `IN` → 科室/院区名称映射），不做 N+1；`avatarUrl` 由 `avatar`（ossId）翻译，前端按 `avatarUrl || avatar` 兜底。
+
+### 6.2 收藏（D2）`POST /appt/patient/favorite/{staffId}`
+
+**响应**：`data = true`（本次新增）/ `false`（早已收藏，幂等成功）。
+**约束**：幂等锚点是 `UNIQUE(user_id, staff_id)`——**先查再插在并发双击下会 500**，实现为直接 INSERT + 捕获唯一键冲突；`staffId` 不存在返回 404。
+
+### 6.3 取消收藏（D3）`DELETE /appt/patient/favorite/{staffId}`
+
+**约束**：删除条件为 `user_id + staff_id`；未收藏过也返回成功（影响 0 行），前端连点无感。
+
+### 6.4 消息列表（D4）`GET /appt/patient/notice/list`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| readFlag | 否 | `true` 已读 / `false` 未读；**不传 = 全部** |
+| pageNum / pageSize | 否 | 默认 1 / 10 |
+
+**响应**：`PageResult<PatientNoticeVo>`，`rows[]`：`noticeId / type / title / content / readFlag / createTime`，按 `create_time DESC, id DESC` 排序。
+**约束**：`type` 返回**线值**（`BOOK_SUCCESS` / `PAY_SUCCESS` / `PAY_TIMEOUT` / `CANCEL_SUCCESS` / `SUSPEND_CANCEL` / `NOSHOW_RECORD` / `BLACKLIST_HIT`），中文映射交给前端；走索引 `idx_notice_user_read(user_id, read_flag, create_time)`。
+
+### 6.5 未读数（D5）`GET /appt/patient/notice/unread-count`
+
+**响应**：`{ unread: n }`（`user_id` + `read_flag=0` 计数）。
+
+### 6.6 标记已读（D6）`PUT /appt/patient/notice/{id}/read`
+
+**语义三态**：未读 → 已读成功；**已读再标记 → 幂等成功**；**别人的 / 不存在的 id → 404**。
+**约束**：不能返回 403——那等于告诉调用方「该 id 存在，只是不属于你」。`UPDATE ... WHERE id=? AND user_id=?` 命中 0 行后再按 `id AND user_id` 复查一次区分「已读」与「不存在」。
+
+> 通知场景七种（PRD §6.12）已于 S8 全部落地：`BOOK_SUCCESS` / `PAY_SUCCESS` / `PAY_TIMEOUT`（S8 补）、`CANCEL_SUCCESS` / `NOSHOW_RECORD`（S6a）、`SUSPEND_CANCEL` / `BLACKLIST_HIT`（S6b）。
+> 推送与「一键全部已读」本期不做。
 
 ---
 
@@ -883,9 +929,20 @@ POST /appt/triage/sign/manual
 - 前置条件同 E1：仅当日、未过爽约判定点。**已判 `NOSHOW` 的单不可补签**——爽约判定权威，扫描先到先得；补签只覆盖「患者已到院但扫码失败」。
 - 与 E1 共用同一状态边与 CAS，仅 `sign_type` 区分，便于后台签到记录统计。
 
-### 7.3 当日签到列表（E3）——P1 占位
+### 7.3 当日签到列表（E3）
 
-`GET /appt/triage/sign/list?date=`：本人在岗院区当日挂号单（含签到态与签到方式）。字段条目在 S6 分诊端联调前补。
+`GET /appt/triage/sign/list?date=`（`@SaCheckRole("triage")`）
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| date | 否 | 就诊日 `yyyy-MM-dd`，缺省今天；格式非法按 **400** 返回（不静默退化为今天） |
+| pageNum / pageSize | 否 | 默认 1 / 10 |
+
+**响应**：`PageResult<SignListVo>`，`rows[]`：`registrationId / registrationNo / patientId / patientName / staffId / staffName / deptId / deptName / campusId / campusName / visitDate / period / timePoint / status / signTime / signType`。
+**排序**：院区 → 科室 → 时刻 → id，便于分诊台按院区做视觉分组。
+
+**数据范围（2026-10-21 定，S8）**：本期**不按「在岗院区」过滤**，返回该日全部挂号单——`sys_user` 没有院区字段、§11 #7「在岗院区存储方式」至今未决，硬做要加账号-院区映射表（DDL）。契约此处如实标注，等账号体系补齐后再收紧。
+**索引**：`appt_registration` 现有 `(status,time_point)` 与 `(user_id,status)`，**没有 `visit_date` 单列索引**；当前 2000 行量级可接受，正式环境建议补 `(visit_date, campus_id)`（DDL，不在本期）。
 
 ### 7.4 加号登记（E4）
 
@@ -1139,8 +1196,9 @@ POST /appt/admin/suspend/handle
 | 预约详情 | GET | `/appt/patient/registration/{id}` | 登录 | — |
 | 待支付取消 | POST | `/appt/patient/payment/{paymentNo}/cancel` | 登录 | Payment / Reg `→CLOSED`；Slot 回补 |
 | 退号 | POST | `/appt/patient/registration/{id}/cancel` | 登录 | Reg `→CANCELED_ACTIVE`；Slot 回池；退款单新建 |
-| 就诊人列表 | GET | `/appt/patient/patient/list` | 登录 | — |
-| 新增就诊人 | POST | `/appt/patient/patient` | 登录 | — |
+| 就诊人列表 | GET | `/appt/patient/patient/list` | 登录 | —（**待实现：S9**） |
+| 新增就诊人 | POST | `/appt/patient/patient` | 登录 | — （**待实现：S9**） |
+| 修改/删除/设默认就诊人 | PUT/DELETE/PUT | `/appt/patient/patient/{id}`、`/{id}/default` | 登录 | — （**待实现：S9**） |
 | 渠道回调 | POST | `/appt/public/payment/callback/{channel}` | 匿名（验签） | Payment `→PAID`；Reg `→BOOKED` |
 | 模拟支付 | POST | `/appt/patient/payment/{paymentNo}/mock-pay` | 登录 | 同 C1 / FAIL 无流转 / TIMEOUT 走关单 |
 | 支付状态查询 | GET | `/appt/patient/payment/{paymentNo}` | 登录 | — |
@@ -1155,7 +1213,9 @@ POST /appt/admin/suspend/handle
 | 停诊记录 | GET | `/appt/admin/suspend/list` | `appt:suspend:list` | — |
 | 号源查看 | GET | `/appt/admin/slot/list` | `appt:slot:list` | — |
 
-**P1 端点（一览表占位，条目待切片联调前补）**：B8–B10 就诊人改删默认、C4 退款查询、D1–D6 收藏与消息、E3 当日签到列表、F3 对账触发、F4 看板、F8–F24 预约/交易/规则/运维管理、F25–F30 六实体生成器 CRUD。
+**P1 端点（一览表占位，条目待切片联调前补）**：B8–B10 就诊人改删默认（归 **S9**）、C4 退款查询、E4 加号登记、F8–F24 预约/交易/规则/运维管理、F25–F30 六实体生成器 CRUD。
+
+> **已转正（2026-10-20/21）**：D1–D6 收藏与消息（S8，§6 字段级）、E3 当日签到列表（S8，§7.3 字段级）、F3 对账触发 / F4 看板（S7，§8.5 已落响应结构）。
 
 ---
 
@@ -1167,5 +1227,5 @@ POST /appt/admin/suspend/handle
 4. OSS 上传接口复用细节（头像占位图落地前的过渡）。
 5. SpringDoc 分组配置：新增 `appt` 模块后追加 `packages-to-scan: org.dromara.appt`，否则接口不出现在 API 文档。
 6. 渠道密钥管理：mock 演示环境的配置写法；真实渠道的密钥注入方式。
-7. E3 / 分诊数据范围的实现在岗院区存储方式（sys_user 扩展字段 or 数据权限）。
+7. E3 / 分诊数据范围的实现在岗院区存储方式（sys_user 扩展字段 or 数据权限）。**现状（2026-10-21）**：未决，故 E3 本期**不按院区过滤**，返回当日全部挂号单（§7.3）。
 8. F16 渠道配置落业务表还是 `sys_config`。

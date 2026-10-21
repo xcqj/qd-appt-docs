@@ -128,6 +128,10 @@
 4. `SlotTemplate` 不设容量字段，生成数量由 `(end_time - start_time) / step_minutes` 决定。
 5. 唯一键：`appt_clinic_type(code)`、`appt_slot_template(staff_id, period, clinic_type)`、`appt_fee_standard(title, clinic_type)`、`appt_staff_favorite(user_id, staff_id)`、`appt_patient(id_type, id_no_hash)`、`appt_schedule(staff_id, visit_date, period)`、`appt_slot(schedule_id, time_point)`、**`appt_registration(slot_id, active_flag)` 联合唯一索引**（active_flag=1 有效挂号、终态置 NULL——MySQL 唯一索引中 NULL 互不冲突，号源回池复用天然成立；一个号最多一笔有效挂号，最终兜底）、`appt_payment(payment_no)`、`appt_refund(refund_no)`。限购复合规则同法：`UNIQUE(patient_id, dept_id, visit_date, active_flag)`、`UNIQUE(patient_id, time_point, active_flag)`。全量索引以 `database-design.md` §4 索引总表为准。
 6. 就诊人身份：身份证号全局唯一，就诊卡号院内唯一；同一证件只能归属一个账号。
+
+> **实现进度（2026-10-21）**：就诊人管理（B6–B10：列表 / 新增 / 修改 / 删除 / 设默认）**尚未实现**，
+> 已排为 **S9**——它是 E5（uni-app）的最后一个后端硬前置：B1 挂号必须传 `patientId`，
+> 没有就诊人管理前端连"选就诊人"这一步都走不通。
 7. **PII**：就诊人证件号（`id_no`）属个人敏感信息——演示数据虚构可明文存储，代码预留列加密接口位（AES/GM），生产必须加密存储 + 脱敏展示；日志禁止打印证件号。**加密与唯一性共存靠 `id_no_hash`**（S1 D-S1-3）：随机 IV 的 AES 密文无法建唯一索引、无法等值查询，故增存 HMAC-SHA256 确定性摘要，**唯一性校验与检索一律走 hash，密文列只用于脱敏展示**——否则约束 6（证件号唯一）与本条（加密存储）互斥。
 
 ---
@@ -321,10 +325,10 @@
 
 挂号成功（待支付）、支付成功、超时关单、退号成功、停诊取消、爽约记录、黑名单生效，均发送站内信。本期**不做**微信订阅消息。
 
-> **落地进度（2026-10-21）**：已实现 `CANCEL_SUCCESS`（退号成功）、`NOSHOW_RECORD`（爽约记录）、
-> `SUSPEND_CANCEL`（停诊取消，**同一账号多张单只发一条**）、`BLACKLIST_HIT`（黑名单生效）四条；
-> 剩余 `BOOK_SUCCESS` / `PAY_SUCCESS` / `PAY_TIMEOUT` 属 S4 已过切片，待后续体验轮补齐（不阻塞本条验收）。
-> 读侧（D4–D6 消息列表/详情/已读）与推送仍未做，站内信目前只能在后台「运维对账 → 站内信」查看。
+> **落地进度（2026-10-21，S8 收口）**：**七类全部落地** —— `BOOK_SUCCESS` / `PAY_SUCCESS` / `PAY_TIMEOUT`（S8 补齐）、
+> `CANCEL_SUCCESS` / `NOSHOW_RECORD`（S6a）、`SUSPEND_CANCEL`（按账号聚合，一账号一条）/ `BLACKLIST_HIT`（S6b）。
+> 读侧 D4–D6 已实现（列表 / 未读数 / 标记已读，契约 §6），患者端可直接消费；
+> **仍未做**：微信订阅消息与推送（本期明确不做，见上文）。
 
 ### 6.13 搜索
 

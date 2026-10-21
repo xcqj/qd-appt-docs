@@ -38,7 +38,11 @@
 | **S5** | 排班/医生查询接口 + 午别余量批量聚合 + 缓存 | 性能对比可演示 | docs / backend / admin | plus-ui：排班页余量 | ⑤ | **已完成 2026-10-20** |
 | **S6a** | 退号与退款、签到（分诊端扫码）、爽约扫描 | 状态机闭环（除停诊） | docs / backend / admin | uni-app（**延后**） | ⑥ | **已完成 2026-10-20** |
 | **S6b** | 停诊批量流转、黑名单、分诊台模式 | 批量操作不重不放 | docs / backend / admin | uni-app（**延后**） | — | **已完成 2026-10-21** |
-| **S7** | 对账（号源 + 支付）+ 台账 + 看板 + 业务数据 seed | **可交付**（= 本期结束） | docs / backend / admin | plus-ui：看板与对账页 | — | 开发完成 2026-10-21（待实测验收） |
+| **S7** | 对账（号源 + 支付）+ 台账 + 看板 + 业务数据 seed | **后端 + 后台 v1 可交付**（移动端见 S10/S11） | docs / backend / admin | plus-ui：看板与对账页 | — | **已完成 2026-10-21** |
+| **S8** | 患者辅助组：收藏 D1–D3 / 消息 D4–D6 / 分诊当日签到列表 E3 | uni-app（E5）前补齐最后 7 个 P1 端点 | docs / backend | — | — | **已完成 2026-10-21** |
+| **S9** | 就诊人管理 B6–B10（列表/新增/修改/删除/设默认） | E5 最后一个后端硬前置（B1 挂号必须传 `patientId`） | docs / backend | — | — | 未开始 |
+| **S10** | 患者端主链路：登录 + 双角色骨架 + 首页/院区/科室/医生/排班/选时间/确认预约/支付/我的预约 | 可演示「挂号 → 支付 → 我的预约」全链路 | docs / app | uni-app（患者端） | — | 未开始 |
+| **S11** | 患者端辅助页 + 分诊台：我的就诊人/我的医生/消息/预约详情（就诊码）/扫码签到/手动补签/当日签到列表 | 双角色页面全齐，接口全部有来源 | docs / app | uni-app（患者端 + 分诊台） | — | 未开始 |
 
 **集成测试**（定义见 PRD §12，此处绑定切片）：
 - ① 50 并发争抢同一时间点，恰好 1 笔成功 —— S3（**2026-10-20 通过**：1 成交 / 49 `SLOT_GONE`）
@@ -127,9 +131,55 @@
 
 - [x] 号源 + 支付对账（七查）、台账、看板 —— 2026-10-21：`reconcile` 包（`ReconcileCheck` 扩展点 + 七个实现 + `ReconcileResultRecorder` + `ReconcileService` 单项隔离）、`POST /appt/admin/reconcile/run`（`appt:reconcile:run`）、`apptReconcileJob`（03:00，已加入任务手动重跑白名单）；`SlotStateService.reclaimGhost`（幽灵占号回收，无有效单才动手）；`dashboard` 包（7 指标 + 科室 TOP5）+ 后台看板页（卡片 + echarts 柱图）+ 对账页「立即对账」按钮
 - [x] 业务数据 seed（~500 排班 / ~9000 号源 / ~2000 挂号单覆盖 8 状态）—— `appt_s7_business_seed.sql`：500 排班 / **9000 号源** / **2000 挂号单**（8 状态齐全）+ 2000 支付单 / 360 退款单 / 620 台账；先清业务表后灌、可重复执行，灌完自洽性检查 `ghost_slots=0 / unoccupied=0`（实测耗时 ~45s）。**踩坑记录**：有效单受 `uk_reg_patient_time` 约束，2 位就诊人只能撑 288 张，必须补到 10 位就诊人（PRD §6.5 上限）
-- [x] 交付验收：README 启动步骤可用 + 三条集成测试留档 —— `docs/README.md` 增「三步启动 + 演示入口」，`test-evidence.md` 增 §10；集成测试 ①–⑦ 均已留档（S3/S4/S5/S6a/S6b/S7）；`docker-compose` 仍留 E2
+- [x] 交付验收：README 启动步骤可用 + 三条集成测试留档 —— `docs/README.md` 增「三步启动 + 演示入口」，`test-evidence.md` 增 §10；集成测试 ①–⑦ 均已留档（S3/S4/S5/S6a/S6b/S7）；`docker-compose` 已由 **E2** 交付（`backend/deploy`，2026-10-21）
 
 **验收实测（2026-10-21）**：`s7_reconcile.sh` `PASS=22 FAIL=0 SKIP=0` —— 批次 `RC20261021000004`、耗时 **1774ms**（预算 60s）、摘要「发现 14 / 修复 12 / 告警 2 / 跳过 0」（多出的 7 条是 R6 按排班级连带清扫，属设计意图）；二次跑 R1/R2/R3/R6 归零、R5 `found=1`（仍 `WAIT_REFUND`，重试属预期）。看板接口与 SQL 逐项一致（`todaySlots=9000` / `todayBooked=60` / `paySuccessRate=74.00` / TOP5 各 10 单）。**脚本修两处**：造数改为「每排班取 1 条候选、四用例跨排班分配 + 自检」，以及 `set -u` 下 `R3_SCHED` 先解析后使用（否则 R4 会重复选中 R3 的排班，去重只剩 3 个）。
+
+### S8 患者辅助组（收藏 / 消息 / 分诊签到列表）
+
+> **为什么插这一片**：E5（uni-app）延后，但患者端「我的医生 / 消息」与分诊台「今日签到」所需的 7 个端点一直是 P1 占位；不做完，E5 会做出「有页面没接口」。
+
+- [x] D1–D3 收藏：`GET /appt/patient/favorite/list`（分页 + 收藏时间倒序 + 医生信息/`avatarUrl` 批量回填）、`POST/DELETE /{staffId}`（**幂等靠唯一键**，不做「先查再插」）
+- [x] D4–D6 消息：列表（`readFlag` 可选过滤、时间倒序）、未读数、标记已读（三态：命中成功 / 已读幂等 / **别人的或不存在一律 404**，不用 403）
+- [x] E3 分诊签到列表：`GET /appt/triage/sign/list?date=`（`@SaCheckRole("triage")`，按院区→科室→时刻排序）；**本期不按在岗院区过滤**（`sys_user` 无院区字段，契约 §11 #7 未决）
+- [x] PRD §6.12 剩余三类站内信：`BOOK_SUCCESS`（B1 落单）、`PAY_SUCCESS`（C1 入账 CAS 命中）、`PAY_TIMEOUT`（关单成功；超时与主动取消共用入口，文案兼容）
+- [x] 契约 §6 / §7.3 从「简条/占位」升级为字段级（参数、响应字段、幂等与 404 语义、分页默认值、数据范围与索引说明）
+- [x] 验收 2026-10-21：`s8_patient_aux.sh` **`PASS=29 FAIL=0 SKIP=0`**（收藏 6 项 / 消息 10 项 / E3 4 项 / 三类通知 6 项 / 清理 1 项）
+- [x] 顺带修种子数据缺陷（**S7 遗留，不影响 S7 结论但要记**）：seed 原来把 2000 张单和 10 位就诊人全挂在**真实登录账号**名下 → 演示账号被「同时持有 ≤3」与「同科室同日」直接挡死（下单恒 `LIMIT_HOLD_MAX` / `LIMIT_DEPT_DAY`）。现改为**虚拟数据账号 `…3199` + 专属就诊人 `3301–3310`**，真实账号 `appt_patient` 名下 0 张单、0 条黑名单计数
+
+### S9 就诊人管理（B6–B10）
+
+> **为什么必须单独一片**：B1 挂号入参是 `patientId`，而患者端此前**只有后台** `/appt/admin/patient`，前端连"选就诊人"这条路都没有。S8 补齐了收藏/消息/签到列表后，这是 E5 的**最后一个后端硬前置**。
+
+- [ ] B6 列表：`GET /appt/patient/patient/list`（本人名下，按默认优先 + 创建时间倒序；不返回完整证件号）
+- [ ] B7 新增：`POST /appt/patient/patient`（证件号经 `IdNoEncryptor` 加密入库；同一账号 ≤10 人 `PATIENT_LIMIT_EXCEEDED`；`isDefault=true` 时同事务取消其它默认）
+- [ ] B8 修改：`PUT /appt/patient/patient/{id}`（属主校验，非本人按 404）
+- [ ] B9 删除：`DELETE /appt/patient/patient/{id}`（**有有效预约时拒删**，返回 `PATIENT_IN_USE`；默认就诊人删除后不自动转移，由前端提示选新默认）
+- [ ] B10 设默认：`PUT /appt/patient/patient/{id}/default`（幂等：已是默认再调仍成功）
+- [ ] 契约收口：§4.6 / §4.7 从简条转字段级，§4.8 从 P1 占位转正；§11 #P1 清单同步
+- [ ] 联调脚本 `s9_patient_crud.sh`：默认唯一 / 第 11 人拒绝 / 他人就诊人 404 / 有效预约拒删 / 证件号非明文存储
+- **验收**：`mvn clean test` 0 错 + 脚本 `FAIL=0`；库里 `id_no` 为密文（`id_no_hash` 可查重）
+
+### S10 患者端主链路（uni-app）
+
+> **前置**：E5（`qd-appt-app` 建仓 + 脚手架）与 **S9**（就诊人）。行号接 S9，页面对应的接口全部已在 S1–S8 落地。
+
+- [ ] 登录与 token：账号密码走现有 `/auth/login`；token 存 storage、401 自动跳登录；微信登录**只留接口位**（未认证账号不敢依赖 `wx.login`）
+- [ ] 双角色骨架：同一套代码按登录角色切换 tabBar（患者 / 分诊），角色来源由登录响应或 `/getInfo` 决定
+- [ ] 页面：首页（院区入口 + 快捷科室）→ 选院区 → 科室三级树 → 医生列表 → 医生主页（收藏态只读展示）→ 科室排班/日期栏 → 选时间点 → 确认预约（内嵌就诊人切换与新增）→ 支付页（Mock：调 `mock-pay` 后轮询 `GET /payment/{paymentNo}`）→ 我的预约（B2 列表）
+- [ ] 交互红线：余量/满诊标签按后端返回渲染（A5/A6 已给 `hasSchedule` 与午别余量），前端**不自己算余量**
+- **验收**：真机/模拟器跑通「登录 → 选就诊人 → 挂号 → 支付 → 列表可见 → 详情可见就诊码」
+
+### S11 患者端辅助页 + 分诊台（uni-app）
+
+> **前置**：S10。接口来源：S9（就诊人）、S8（收藏 D1–D3 / 消息 D4–D6 / 签到列表 E3）、S6a（B5 退号、E1/E2 签到）。
+
+- [ ] 我的就诊人：列表 / 新增（证件号输入 + 脱敏回显）/ 修改 / 删除 / 设默认
+- [ ] 我的医生：收藏列表（分页）+ 取消收藏；医生主页可收藏/取消
+- [ ] 消息：列表（全部/未读 tab）+ 未读红点 + 点开标记已读
+- [ ] 预约详情：状态时间线 + 就诊码（`visitCode` 仅有效态）+ 退号（含截止提示 `REFUND_DEADLINE_PASSED` 的文案）
+- [ ] 分诊台：扫码签到（`registrationNo`）/ 手动补签 / 当日签到列表（按院区视觉分组）
+- **验收**：双角色切换正常；分诊账号看不到患者 tab；退号后状态与退款入口正确
 
 ### 3.9 核心亮点 ↔ 切片 ↔ 验收证据
 
@@ -144,7 +194,8 @@
 | 放号滚动窗口 D1（可配） | S2（任务侧）/ S5（查询侧） | 窗口外不可约；08:00 任务只生成「今日+N」 | ✅ 任务侧 2026-10-20 验收（只生成目标日、重跑 0 新增）；查询侧过滤归 S5 |
 | 余量聚合 M×2 → 1 + Lua EXISTS 守卫 | S5 | 单屏 1 次聚合 SQL + 压测对比表 | ✅ 2026-10-20 实测（单屏冷启动 3 条 / 命中 2 条，与医生数无关；`redis` p95 9.3ms 命中率 100% / `db` p95 10.6ms；1000 次挂号关单后差值 0，删键不创建） |
 | 回调幂等 + 「钱到了号没了」 | S4 | 回调 3 次仅 1 次入账；关单后回调 → 自动退款 + 告警 | ✅ 2026-10-20 实测（3 次投递回调记录仅 1 条、payment 仅 1 次 PAID；关单后回调 → refund REFUNDED、payment 保持 CLOSED） |
-| 对账七查 + 保守修复 | S7 | R1 幽灵占号自动回池；R4 只告警不自动修 | 未开始 |
+| 对账七查 + 保守修复 | S7 | R1 幽灵占号自动回池；R4 只告警不自动修 | ✅ 2026-10-21 实测（`s7_reconcile.sh` `PASS=22 FAIL=0`：批次 `RC…0004` / 1774ms；R1 回池 + `RELEASE` 台账、R2 补占用、R3 自动补退、R4 仅 `ALERT` 且支付单未改、R5 重发、R6 排班级补退号、R7 余量键归零；二次跑可修项归零） |
+| 看板口径写死 + 科室 TOP5 | S7 | 接口 = SQL = 页面 | ✅ 2026-10-21：`todaySlots=9000` / `todayBooked=60` / `paySuccessRate=74.00`（1480/2000）/ TOP5 各 10 单，三处一致 |
 | 爽约半开窗口 + 全量兜底 | S6a | 跳过一轮后下一轮补判，漏判 0 | ✅ 2026-10-20：主批 `[now-35m, now-30m)` + 兜底 `<= now-35m`，脚本用 −3h 陈旧单等价模拟「窗口已滑过」，兜底命中并判 `NOSHOW` |
 | 单号规则（前缀 + 日期 + Redis INCR） | S3 | 并发 50 单号不重复、跨日重置 | 代码完成 2026-10-20（R/P 前缀 + `SequenceUtils` 每日重置；并发 50 未出现重号） |
 | `Idempotency-Key`（仅 B1） | S3 | 同 key 双击只产生一笔待支付 | ✅ 2026-10-20 实测（第二次 `data.duplicate=true`，DB 仍 1 单） |
@@ -208,6 +259,8 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-20 | **S5 验收实测**：读压测 100 并发 ×1000 样本 ×3 轮 —— 单屏 SQL 冷启动 3 条 / 命中 2 条 / `db` 3.2 条（与医生数无关），`redis` p95 9.3ms、命中率 100%，`db` p95 10.6ms（差距 14%，落在波动内，默认保持 `redis`）；一致性 1000 次「挂号 → 超时关单回补」差值恒 0 + 删键不创建（`PASS=11 FAIL=0`）；回归 S3 `PASS=14`、S4 `PASS=21`；压测脚本修两处健壮性（跳过无人员的残留院区、`date +%s%N` 计时）与 token 兼容（`APPT_TOKEN` 或 `TOKEN`） | backend + docs 各一提交 |
 | 2026-10-20 | **S6a 开发轮（状态机闭环与售后链路）**：退号 B5（单柱 CAS + 回池 + 事务内建退款单 + 事务外渠道退款 + `CANCEL_SUCCESS` 站内信）、签到 E1/E2（`@SaCheckRole("triage")`，同一条状态边）、爽约+过期合并扫描（主批 + 全量兜底 + `NOSHOW_RECORD` 站内信 + `SlotStateService.expire` 余量 −1）、置完成 23:30、B2 我的预约列表 / B3 详情（就诊码、证件号脱敏）、后台手动退号 F10、任务手动重跑端点（白名单 4 任务）、`appt_s6a_seed.sql`（triage 角色/账号 + 两个按钮权限）、`s6a_state_machine.sh` | backend + admin + docs 各一提交 |
 | 2026-10-21 | **E 系列收尾（E2/E3/E4）**：E4 核查后直接销项（`appt_s0_cleanup.sql` 已含「AI控制台」且库内 15 个残留菜单 id 全为空、`pnpm-lock.yaml` 早已入库）；E2 新增 `backend/deploy`（compose 三件套 + `init-db.sh` 一键导 8 个 SQL，端口避让既有容器，SnailJob 标注为外部依赖）；E3 新增两个 GitHub Actions 工作流 + 首个单测 `SuspendScopeParserTest`（8 例全绿） | backend + admin + docs 各一提交 |
+| 2026-10-21 | **排片：新增 S9、S10、S11，E5 收窄**（仅文档）：S9 = 就诊人管理 B6–B10（盘点发现患者端只有后台 `/appt/admin/patient`，B1 挂号依赖 `patientId`，是 E5 最后一个后端硬前置）；E5 收窄为「建仓 + 脚手架」，页面拆为 S10（患者端主链路）与 S11（辅助页 + 分诊台）——功能切片仍全部 S 编号，E 系列只管工程基线；核实小程序账号可开发不可发布（未备案/未认证/医疗类目需资质） | docs 一提交 |
+| 2026-10-21 | **S8 开发与验收（患者辅助组）**：收藏三件套 / 消息三件套 / 分诊当日签到列表 + 三类站内信补齐 + 契约 §6/§7.3 字段级；`s8_patient_aux.sh` `PASS=29 FAIL=0`。**修脚本 4 处**：把 HTTP 200 当业务成功（RuoYi 业务码在 body）、收藏 `status` 语义反了（`'0'`=正常却判成停诊）、第二笔下单撞同科室同日（改为「按账号真实可约」选号）、残留占位键导致 `SLOT_GONE`（下单前清 `appt:slot:hold:*`）。**修种子 2 处**：注册单与就诊人一并隔离到虚拟账号，避免演示账号被限购/黑名单锁死 | backend + docs 各一提交 |
 | 2026-10-21 | **S7 验收实测**：`s7_reconcile.sh` `PASS=22 FAIL=0`（批次 `RC20261021000004` / 1774ms / 发现 14 修复 12 告警 2；二次跑归零、R5 重试 ≤1）；看板接口与 SQL 逐项一致；seed 500 排班 / 9000 号源 / 2000 单（8 状态齐全）灌入 ~45s、自洽性 `ghost=0 / unoccupied=0`。**修脚本两处**：① 造数跨排班隔离（R6 是排班级，同排班会把 R2/R4 的断言对象一并退掉，产生假 FAIL）+ 去重自检；② `set -u` 下 `R3_SCHED` 先解析后使用（否则 R4 重复选中 R3 的排班） | backend + docs 各一提交 |
 | 2026-10-21 | **S7 开发轮（对账与交付）**：七查 R1–R7（`ReconcileCheck` 扩展点、单项 try/catch 隔离、`RC` 批号、异常一行一记录）、`SlotStateService.reclaimGhost`（幽灵占号，无有效单才回池）、`POST /appt/admin/reconcile/run` + `apptReconcileJob`（03:00，白名单可手动重跑）、看板 7 指标 + 科室 TOP5（口径写死 `visit_date=CURDATE()`）+ 后台卡片/柱图页 + 对账页「立即对账」、`appt_s7_business_seed.sql`（500/9000/2000，8 状态自洽）、`appt_s7_seed.sql`（看板菜单 + 两个权限点）、`s7_reconcile.sh`、`docs/README.md` 三步启动 | backend + admin + docs 各一提交 |
 | 2026-10-21 | **S6b 验收实测**：`s6b_suspend_blacklist.sh` `PASS=25 FAIL=0`（E5 登记与幂等 / F2 八项副作用 / 已签到跳过 / 余量 5→4 / 重复处理 `handled=false` / 黑名单拦截+建单+通知）；页面验收「停诊登记 → 处理」摘要与挂号单、退款单、站内信、排班四处一致；黑名单页显示 `system` 自动行、站内信 `BLACKLIST_HIT` 内容正确。**修脚本四处**：断言查错列（`appt_registration` 无 `registration_id`）、黑名单用例漏 `Idempotency-Key`、手工造数 SQL 误依赖已删除的临时排班、S3 的 `LIMIT_HOLD_MAX` 选号（原按「每科室首个号源」挑，候选全挤在同一天 08:00，去重后凑不满 3 笔；改为「科室 × 就诊日」组合后 `PASS=14`） | backend + docs 各一提交 |
@@ -239,7 +292,11 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 - [x] **E2 启动与部署基线** —— 2026-10-21：`backend/deploy/{docker-compose.yml, init-db.sh, README.md}`。MySQL 8.4 / Redis 8 / MinIO 三件套，宿主机端口刻意错开既有 `blog-*` 容器（**3307 / 6380 / 9010-9011**）；`init-db.sh` 等健康检查后按序导入 8 个 SQL（结构 → 基础数据 → 菜单 → 账号 → 各切片 seed → 演示业务数据，幂等）；`docker compose config` 校验通过。**SnailJob 不纳入**（无稳定公共镜像，按官方发行包单独部署，缺它后端仍可启动、任务可手动重跑）
 - [x] **E3 CI** —— 2026-10-21：`backend/.github/workflows/ci.yml`（JDK 21 + `mvn -B -pl ruoyi-modules/appt -am clean test`）、`admin/.github/workflows/ci.yml`（`pnpm install --frozen-lockfile` → `vue-tsc` → `oxlint` → `vite build`）。同时补上本仓**第一个单测** `SuspendScopeParserTest`（8 例，纯逻辑不连库：单日/区间/院区编码、SCHEDULE 拒区间、倒序/超跨度/早于今天/未知类型），`mvn test` 通过
 - [x] **E4 数据脚本收尾** —— 2026-10-21 核查：两项在 S 系列期间已顺手完成（`appt_s0_cleanup.sql` 已含 `1761400000000000121` 且库内该菜单与其余 14 个残留 id 均查询为空；`admin` 仓 `pnpm-lock.yaml` 早已入库且未被 `.gitignore` 命中），本轮只更新状态与留档
-- [ ] **E5 `qd-appt-app` 仓初始化**（uni-app，患者端 + 分诊台）——**延后到后端与后台管理完成后**（2026-10-19 拍板）
+- [ ] **E5 `qd-appt-app` 建仓 + uni-app 脚手架**（**只做基线，不含业务页面**）：GitHub 建仓、uni-app + TS 脚手架、`manifest.json` 填小程序 AppID（`gh_a0cf4e2a7…`）、`pages.json`/tabBar 骨架占位、本地联调（开发者工具勾「不校验合法域名」连 `127.0.0.1:8082`）、ESLint/构建脚本
+- **页面开发不属 E 系列**：患者端主链路见 **S10**、辅助页与分诊台见 **S11**（§3）
+
+> **小程序可用性（2026-10-21 核实）**：该小程序已存在、类目已选，但**未备案、未认证、基本信息未填** —— 开发者工具调试 / 真机预览 / 体验版可用，**不可提交审核发布**（医疗类目需执业许可证，且本仓为虚构演示数据）。
+> **为什么页面不进 E 系列**：E 系列的定义是「工程基线、横切、不属于 S 系列」；页面属于功能交付，且 §2 总表本就有「前端归属」列，故归 S10/S11。
 
 ---
 
@@ -270,6 +327,8 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
 | v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
 | v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
+| v0.5.1 | 2026-10-21 | **排片：新增 S9 / E5 收窄 / 新增 S10·S11**：S9 = 就诊人管理 B6–B10（E5 前最后一个后端硬前置，B1 挂号依赖 `patientId`）；E5 收窄为「建仓 + 脚手架」（E 系列只管工程基线），页面拆为 **S10 患者端主链路**、**S11 辅助页 + 分诊台**；记录小程序现状（未备案/未认证 → 仅开发与体验版可用） |
+| v0.5.0 | 2026-10-21 | **S8 实现与文档（患者辅助组）**：新增 `account/FavoriteService`+`PatientFavoriteController`（D1–D3）、`notice/PatientNoticeService`+`PatientNoticeController`（D4–D6）、`SignService.listByDate`+`TriageSignController`（E3）；`NoticeSender` 补 `BOOK_SUCCESS`/`PAY_SUCCESS`/`PAY_TIMEOUT` 三处调用；契约 §6 升级字段级、§7.3 补字段与数据范围、§11 #7 标注现状；PRD §6.12 改为 7 类全齐；ROADMAP 新增 S8 段与 §2 状态；test-evidence §11；`appt_s7_business_seed.sql` 把种子单与就诊人隔离到虚拟账号；新增 `s8_patient_aux.sh` | 
 | v0.4.9 | 2026-10-21 | **工程基线收尾（E2/E3/E4）**：E4 销项（核查后两项早已完成）；E2 新增 `backend/deploy/{docker-compose.yml,init-db.sh,README.md}`（三件套 + 一键导 8 个 SQL，端口避让，SnailJob 明确为外部依赖）；E3 新增 backend/admin 两条 GitHub Actions 工作流与首个单测 `SuspendScopeParserTest`；`docs/README.md` 启动段补「一键（推荐）」并保留手工兜底 |
 | v0.4.8 | 2026-10-21 | **S7 实现与文档**：契约 §8.5 F3/F4 落响应结构、F22 补按 `batch_no` 过滤；PRD §9.6 补修复边界与结果字段、§10.2 补看板口径；技术方案 §3.5 验证数据换为「脚本入口 + 待实测」；ROADMAP S7 勾选与状态、§5 开发轮、§7 E2 注明 README 已交付；`docs/README.md` 增三步启动与演示入口；test-evidence 增 §10；**验收实测回填**：`s7_reconcile.sh` `PASS=22 FAIL=0`（1774ms / 发现 14 修复 12 告警 2）、看板与 SQL 一致、seed 规模 500/9000/2000；`script/test/README.md` 增 s7 段落（含「R6 是排班级 / 造数必须跨排班 / 跑完 reseed」） |
 | v0.4.7 | 2026-10-21 | **S6b 实现与文档**：契约 §7.5 改「一条登记承载区间（`endDate` + `scope_value` 编码）」并补 E5 响应字段、§8.3 补实现口径（批号锁 / `PENDING→HANDLED` / `TAKEN→SUSPENDED` 余量 0 / WAIT_PAY 关单 / 已签到跳过 / 通知聚合）；PRD §6.10 补区间承载与「已签到跳过」计数；database-design §3.2 补 `scope_value` 编码说明（不改表）；ROADMAP S6b 勾选 + §2 状态 + §3.9 停诊行修订 + §5 进度；新增 `appt_s6b_seed.sql`（`appt:suspend:handle`）与 `s6b_suspend_blacklist.sh`；**验收实测**：脚本 `PASS=25 FAIL=0`，页面「停诊登记 → 处理」与挂号单/退款单/站内信/排班四处一致，黑名单页自动行与 `BLACKLIST_HIT` 通知正确（`test-evidence.md` §9） |
