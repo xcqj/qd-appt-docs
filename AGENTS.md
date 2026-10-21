@@ -79,7 +79,7 @@ Agent 只需要三样，其余全部自行补齐：
 **先跑门禁，再写交付说明**：
 
 ```bash
-cd docs && python3 script/doc_audit.py      # 全绿才允许提交；--verbose 打印命中原文
+cd docs && python3 script/doc_audit.py      # 全绿才允许提交；--verbose 打印命中原文行
 ```
 
 **钩子（每个克隆一次性启用，强烈推荐）**：
