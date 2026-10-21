@@ -73,7 +73,20 @@
 | MinIO | 图片对象存储（院区封面 / 医生头像 `ossId`） | `127.0.0.1:9000` |
 | SnailJob 2.0.2 | 定时任务调度台（放号 / 关单 / 爽约 / 置完成 / 对账） | 控制台 `8800`，组 `ruoyi_group` |
 
-### 1. 建库并导入脚本（按顺序）
+### 1. 建库并导入脚本
+
+**一键（推荐，E2）**：`backend/deploy` 里已备好 compose 与导入脚本（端口 3307 / 6380 / 9010-9011，刻意错开宿主机上其它项目的 3306 / 6379 / 9000）：
+
+```bash
+cd backend/deploy
+docker compose up -d     # MySQL 8.4 / Redis 8 / MinIO（SnailJob 需按官方发行包单独部署）
+./init-db.sh             # 等健康检查 → 按序导入 8 个 SQL → 打印规模自检
+```
+
+若端口或密码与本机不符，改 `docker-compose.yml` 的 `ports` 并同步 `application.yml`（`spring.datasource.url` / `spring.data.redis.port`）。
+不想起容器时，也可对已有实例执行 `MYSQL_PORT=3306 ./init-db.sh`。
+
+**手工（等价，按顺序）**：
 
 ```bash
 cd backend/script/sql
