@@ -82,6 +82,16 @@ Agent 只需要三样，其余全部自行补齐：
 cd docs && python3 script/doc_audit.py      # 全绿才允许提交；--verbose 打印命中原文
 ```
 
+**钩子（每个克隆一次性启用，强烈推荐）**：
+
+```bash
+cd docs && bash script/setup-hooks.sh       # 设 core.hooksPath=.githooks（仓库本地配置，不影响全局）
+```
+
+启用后，任何提交只要暂存了 `.md`，`pre-commit` 会先跑门禁，**不通过直接拒绝提交**（报错带行号）。
+这是唯一不依赖「记得跑」的闸门；绕过需 `git commit --no-verify`（不推荐，CI 仍会拦）。
+局限：只管 docs 仓的 Markdown —— 「改了后端代码却没同步文档」仍靠本节的传播表自查。
+
 门禁查四类「忘了也不会报错」的问题：过期表述（待实测/待填/仍留 E2/本期结束）、§2 与 §3 状态传播、
 test-evidence 章节编号、契约 P1 清单；外加复用 `backend/script/enum_sync_audit.py` 的字典审计。
 

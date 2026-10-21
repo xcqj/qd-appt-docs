@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# docs 仓 pre-commit 钩子：暂存区含 Markdown 时先跑文档一致性门禁。
+#
+# 为什么用钩子而不是"记得跑"：门禁写在 AGENTS 里靠自觉，CI 是 push 之后才发现；
+# 只有 pre-commit 能在提交那一刻硬拦。换机器后执行一次 `bash script/setup-hooks.sh` 即可。
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$root" || exit 0
+
+changed="$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.md$' || true)"
+if [ -z "$changed" ]; then
+  exit 0
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-commit: 未找到 python3，跳过文档门禁（建议补装后重试）" >&2
+  exit 0
+fi
+
+echo "-- 文档一致性门禁（本次暂存 $(echo "$changed" | wc -l | tr -d ' ') 个 .md）--"
+if ! python3 script/doc_audit.py; then
+  echo
+  echo "提交被拒绝：文档一致性门禁未通过（见上方 FAIL 行）。"
+  echo "修完重试即可；确需绕过用 \`git commit --no-verify\`（不推荐，CI 仍会拦）。"
+  exit 1
+fi
