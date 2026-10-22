@@ -521,7 +521,7 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 - **消息详情无端点**：契约 §6 只有 D4/D5/D6，详情数据由列表页写入 `uni.storage`（`appt_notice_<id>`）后跳转；**直接输 URL 打开会提示「消息不存在或已删除」**（无缓存）。如需深链，要加 `GET /appt/patient/notice/{id}`。
 - **E3 `timePoint` 仍是完整时间戳**：S6a 的 `SignListVo` 未加 `@JsonFormat`，前端 `timePointText()` 兜底；如需后端统一，与 B1/B2/B3 一样加注解即可。
 - **存量站内信仍含 `T`**：已落库的正文不会自动改写（本次只影响新消息）；如需清洗执行 `test-evidence` 或 ROADMAP 记录的 `REGEXP_REPLACE` 语句。
-- **本片未做**：加号登记（E4 后端未实现，分诊底栏入口保留「暂未开放」）。
+- **本片未做**：加号登记（E4 后端未实现）。分诊底栏已**隐藏**「加号」入口（底栏 3 项：签到 / 当日 / 停诊），避免演示时点到「暂未开放」。
 - **三处 UI 缺陷（已修，留档）**：① `wd-popup` 默认 `z-index:10` 低于底部固定条（20）→「保存」被遮挡，显式 `:z-index="1000"`；② 医生页进排班却列全科 → 「医生视角 / 科室视角」双口径；③ **`@click="goAppointments"` 会把点击事件对象当第一参数传入**，落点意图被存成 `MouseEvent` → `activeTab` 无匹配、列表为空；改为 `@click="goAppointments()"` 并对意图做白名单校验。
 - **双角色验收**：分诊账号（`appt_triage`）访问 `/pages/triage/**` 正常，患者 tab 不渲染；患者账号访问分诊页被 guard 拦截。
 
