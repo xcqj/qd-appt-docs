@@ -521,6 +521,21 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 - **消息详情无端点**：契约 §6 只有 D4/D5/D6，详情数据由列表页写入 `uni.storage`（`appt_notice_<id>`）后跳转；**直接输 URL 打开会提示「消息不存在或已删除」**（无缓存）。如需深链，要加 `GET /appt/patient/notice/{id}`。
 - **E3 `timePoint` 仍是完整时间戳**：S6a 的 `SignListVo` 未加 `@JsonFormat`，前端 `timePointText()` 兜底；如需后端统一，与 B1/B2/B3 一样加注解即可。
 - **存量站内信仍含 `T`**：已落库的正文不会自动改写（本次只影响新消息）；如需清洗执行 `test-evidence` 或 ROADMAP 记录的 `REGEXP_REPLACE` 语句。
-- **本片未做**：加号登记（E4 后端未实现）、停诊上报页（S6b 后端已有，页面留后续）。
+- **本片未做**：加号登记（E4 后端未实现，分诊底栏入口保留「暂未开放」）。
 - **三处 UI 缺陷（已修，留档）**：① `wd-popup` 默认 `z-index:10` 低于底部固定条（20）→「保存」被遮挡，显式 `:z-index="1000"`；② 医生页进排班却列全科 → 「医生视角 / 科室视角」双口径；③ **`@click="goAppointments"` 会把点击事件对象当第一参数传入**，落点意图被存成 `MouseEvent` → `activeTab` 无匹配、列表为空；改为 `@click="goAppointments()"` 并对意图做白名单校验。
 - **双角色验收**：分诊账号（`appt_triage`）访问 `/pages/triage/**` 正常，患者 tab 不渲染；患者账号访问分诊页被 guard 拦截。
+
+### 14.5 S11.1 停诊上报（E5，2026-10-23 追加）
+
+页面：`app/src/pages/triage/suspend.vue`（范围三选一 → 院区 / 科室（A2）→ 日期 → 医生（A6）→ 午别 → 原因 → 提交）。**零后端改动**，全部复用 S6b 的 `POST /appt/triage/suspend`。
+
+| 场景 | 请求要点 | 实测结果 |
+|---|---|---|
+| 院区某日 | `scopeType=CAMPUS_DATE`、`scopeValue=1761400000000003203:2026-10-24` | `S20261023000001` / `PENDING` |
+| 同范围重复上报 | 同上再提交一次 | `duplicate=true`，批号复用 `S20261023000001`（幂等） |
+| 医生某日 + 区间 | `STAFF_DATE`、`scopeValue=2026-10-25`、`endDate=2026-10-26`、带 `staffId` | `scopeValue` 被规范化成 `2026-10-25~2026-10-26`（`S20261023000002`） |
+| 单个午别 | `SCHEDULE`、`scopeValue=<scheduleId>` | `scopeValue` = 排班 id（`S20261023000003`），`staffId` 缺省由排班反查 |
+| 边界（后端 `SuspendScopeParser`） | `SCHEDULE` 带 `endDate` / 跨度 >31 天 / 开始日早于今天 / 原因留空 | 分别 400：不支持区间、跨度超限、不能早于今天、原因不能为空 |
+| 数据清理 | — | 三条验证登记已删除，`appt_suspend_record` 归零（不污染演示数据） |
+
+> 两段式语义（务必在演示时说明）：本页只**上报**并拿到 `S` 批号；真正「批量被动退号 + 退款 + 站内信 + 排班置停诊」由后台「排班管理 → 停诊处理」（F2）执行。已签到的预约不参与批量退号（PRD §6.10）。
