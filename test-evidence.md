@@ -557,3 +557,17 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 4. 演示后重跑 `appt_s7_business_seed.sql` 恢复数据
 
 **前端配套**：换科室/医生/午别时清空结果卡（此前旧批号一直挂着，易误读为「当前选择已上报」）；结果卡新增「停诊对象」行（院区 · 科室 · 医生 · 日期 午别）。
+
+#### 14.5.2 回归脚本补齐三种范围（2026-10-23）
+
+`backend/script/test/s6b_suspend_blacklist.sh` 原先只构造 **`SCHEDULE`** 一种范围的登记（第 158 行），而 `SCHEDULE` 的 `scopeValue` 就是排班 id（完整主键），恰好把「`staffId` 从 `scopeValue` 移出到独立列」这一类缺陷全部绕过 —— 这就是上面两个缺陷没被自动化发现的原因。
+
+已补两个用例（+17 条断言），实测 **`PASS=42 FAIL=0 SKIP=0`**（原 25 条）：
+
+| 用例 | 断言 |
+|---|---|
+| `STAFF_DATE` 幂等 | 同医生同日重复登记 `duplicate=true` 且批号复用；**换医生同日 `duplicate=false` 且批号不同**（缺陷 1 回归） |
+| `STAFF_DATE` 处理 | 排班 `NORMAL→SUSPENDED`、该单 `CANCELED_PASSIVE`、号源 `SUSPENDED`+清空占用、生成退款单、**同院区另一医生排班仍 `NORMAL`**（缺陷 2 回归，同时证明按 `staff` 展开不误伤） |
+| `CAMPUS_DATE` | `scopeValue` 规范化为 `campusId:日期`；处理后按院区展开，排班停诊 + 被动退号 + 退款 |
+
+造数保护：日期取 **+40 / +41 天**（避开种子窗口 +1~+7），处理前先校验该医生/院区当天除自造排班外无其他排班，否则 `SKIP` 而不是误停演示数据；脚本退出自动清理（实测 `appt_schedule` / `appt_registration` / `appt_blacklist` 归零）。
