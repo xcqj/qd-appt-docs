@@ -430,3 +430,45 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 - **10 人是软上限**：count-then-insert，极端并发可能超出 1~2 人；单账号正常操作不会触发。
 - **删除不转移默认**：删掉默认就诊人后账号可暂时没有默认，由前端提示用户重选。
 - **`status` 语义（2026-10-22 复核修正）**：原先记录「生成器 `insertByBo` 判反」的说法**不成立**——库列 `char(1)` 中 `'0'`=正常映射 `false`、`'1'`=停用映射 `true`，故 `Boolean.TRUE.equals(status)` 判「停用行」是正确的；`RegistrationBookingService` 亦已校验停用就诊人。结论已写入 `backend/AGENTS.md` §6，而 RuoYi `'0'`（正常）映射为 `false`，语义相反；患者侧实现按正确语义，后台那份建议单开修复项。
+
+---
+
+## 13. S10 患者端主链路（uni-app）
+
+> 记录时间 2026-10-22。门禁 + 接口链路两层；浏览器手工走查由用户在 8084 完成（AI 不代跑浏览器）。
+
+### 13.1 门禁
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 依赖 | `pnpm install --frozen-lockfile` | lockfile 一致 |
+| 类型 | `pnpm type-check` | 0 错 |
+| 静态检查 | `pnpm lint`（`oxlint src`） | 0 warning / 0 error（47 文件） |
+| 构建 | `pnpm build:h5`（`UNI_OUTPUT_DIR` 临时目录，**未删 dist**） | DONE |
+| 后端单测 | `mvn -pl ruoyi-modules/appt -am test` | 13 例全绿 |
+| 文档门禁 | `python3 script/doc_audit.py` | 5 项全过 |
+
+### 13.2 接口链路（真实加密登录直打，非 mock）
+
+| 步骤 | 端点 | 观测 |
+|---|---|---|
+| A2 | `GET /appt/public/dept/tree?campusId=…3201` | 一级/二级/三级齐全，叶子才是 A3 入参 |
+| A5（科室口径） | `GET /appt/public/schedule/dates?deptId=…3311` | `periods[].scheduleId` 恒 `null`（聚合口径） |
+| A6 | `GET /appt/public/schedule/staffs?deptId=…3311&date=2026-10-23` | `periods[].scheduleId="1761500000000100121"`、`remain=8` |
+| A7 | `GET /appt/public/slot/list?scheduleId=…&period=PM` | 仅可约号源，`fee="22.00"` |
+| B1 | `POST /appt/patient/registration`（带 `Idempotency-Key`） | `R20261022000001` / `P20261022000001` / `amount="22.00"` |
+| C3（支付前） | `GET /appt/patient/payment/{no}` | `WAIT_PAY` |
+| C2 | `POST …/mock-pay` `{result:SUCCESS}` | `accepted=true`（**仅受理**，不是已支付） |
+| C3（2s 后） | 同上 | `PAID` + `tradeNo=MOCK…` |
+| B2 | `GET /appt/patient/registration/list?status=BOOKED` | 1 条，字段齐全 |
+| B4 | `POST /appt/patient/payment/{no}/cancel`（另一单） | `CLOSED`；**二次调用仍 `CLOSED`**（幂等） |
+| 号源回补 | 取消后再查 A7 | 可约数 **8 → 8** |
+| B6/B7 | 列表 → 新增 → 再列表 | 空 → `200` 新增 → 立即可见（脱敏串 `1101**********9999`） |
+
+### 13.3 边界与已知问题
+
+- **本片不含**：预约详情（就诊码）、退号（B5 页面）、我的就诊人独立页、我的医生、消息、分诊台 —— 全部归 **S11**。
+- **`timePoint` 口径**：B1/B2/B3 三只 VO 此前序列化完整时间戳，与契约 §2.4 冲突；本片加 `@JsonFormat(pattern = "HH:mm")`，前端 `timePointText()` 仍做防御性归一（灰度期两端都显示正常）。
+- **`scheduleId` 只回填在能一一对应的地方**：A6 恒有值；A5 仅 staffId 模式有值，deptId 模式恒 `null`（同午别多医生求和，单值无意义）。
+- **两处 UI 缺陷（本片已修，留档）**：① `wd-popup` 默认 `z-index:10` 低于底部固定条（20），弹层「保存」被遮挡 → 显式 `:z-index="1000"`；② 从医生主页进排班页却列全科医生 → 改「医生视角 / 科室视角」双口径（A5 staffId / deptId 模式随视角切换）。
+- **演示数据前提**：要让演示账号名下从 0 单开始，重跑 `backend/script/sql/appt_s7_business_seed.sql`。

@@ -99,6 +99,8 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 | 完整时间戳 | `yyyy-MM-dd HH:mm:ss` 本地时区 | `2026-10-21 09:51:00` |
 | 金额 | JSON 字符串，两位小数 | `"22.00"` |
 
+> **实现口径（2026-10-22，S10）**：患者端 B1 / B2 / B3 三个响应 VO 的 `timePoint` 类型是 `LocalDateTime`，此前未加格式注解，实际序列化成 `2026-10-23 17:20:00`（与本节冲突）。已在这三个 VO 上加 `@JsonFormat(pattern = "HH:mm")`，对外恒为 `HH:mm`；前端仍保留 `timePointText()` 做防御性归一（两种形态都能吃），避免灰度期出现 `10月23日 2026-10-23 17:20:00` 这类拼接。
+
 ### 2.5 幂等与防重
 
 - **B1 提交挂号强制要求 `Idempotency-Key` 请求头**（客户端生成 UUID）；缺失返回 400。服务端以该键在 Redis 存首次结果（TTL 24h），重复提交直接返回首次结果并附 `DUPLICATE_SUBMIT`——防用户双击造出两笔待支付单。
@@ -276,8 +278,10 @@ GET /appt/public/schedule/dates?deptId=&staffId=
 ```text
 visitDate     yyyy-MM-dd
 hasSchedule   true / false
-periods       [{ period, remain }]；无排班日为空数组
+periods       [{ period, remain, scheduleId }]；无排班日为空数组
 ```
+
+**`scheduleId` 语义（2026-10-22 补，S10）**：`deptId` 模式是「同午别多医生余量求和」的聚合口径，单值无意义 → 恒为 `null`；`staffId` 模式与该医生当日该午别的排班一一对应 → 回填排班 id。该字段是 A7 的入参来源之一（另一处是 §3.6），前端不得据此反推院区 / 科室排班。
 
 **前端标签映射（红线 6，两套语义严禁混用）：**
 
@@ -312,9 +316,11 @@ staffs: [{
   avatar
   title
   degree
-  periods: [{ period, remain }]
+  periods: [{ period, remain, scheduleId }]
 }]
 ```
+
+**`scheduleId` 用途（2026-10-22 补，S10）**：`periods[].scheduleId` 是该医生该午别的排班 id，**A7 可约时间点（§3.7）的唯一入参来源**——公开组此前没有任何端点能取到排班 id，患者端「选时间点」无法联调。它取自本条端点既有的排班查询列，不新增 SQL、不改余量缓存键（`appt:remain:{scheduleId}:{period}`）。`remain = 0` 的午别同样带 `scheduleId`（前端置灰，不该当作无排班）。
 
 **约束：**
 
@@ -528,6 +534,23 @@ POST /appt/patient/payment/{paymentNo}/cancel
 **业务行为：** 与超时关单同一事务形状（技术方案 §3.4）：三步 CAS 均以 `WAIT_PAY` 为条件（重复触发第二次全部影响 0 行）+ 台账 + afterCommit 余量 +1 + 关单站内信。**不涉及退款**（未发生支付）。
 
 **约束：** 终态为 `CLOSED`，与超时关单同属「未发生支付」，**不计入**黑名单统计口径（PRD §6.9 不计入集合）。
+
+**响应（2026-10-22 补，S10 实现）**：
+
+```text
+paymentNo
+amount
+status         关单后状态（CLOSED）；若此前已支付则返回 PAID
+expireTime
+payTime        已支付才有
+tradeNo        已支付才有
+```
+
+**实现口径（2026-10-22，S10）**
+
+- 入口 `PaymentCloseService.cancelByPatient(paymentNo, userId)`：先走 `PaymentQueryService.query` 做**属主校验**（不存在与「不是你的」同一文案，不泄露存在性），同时触发一次节流内主动查单——**钱已到账时先入账并返回 `PAID`，绝不把已付款的号关掉**；仅 `WAIT_PAY` 才进 `closeOne`（本切片新增的端点，此前契约已定义但后端缺入口）。
+- **幂等**：非 `WAIT_PAY`（已支付 / 已关闭 / 已退款）直接返回当前状态，不抛错；三步 CAS 让并发重复调用只生效一次。
+- 复用超时关单同一事务形状：Payment/Registration `WAIT_PAY→CLOSED` + 台账 + afterCommit 余量 +1（`time_point` 已过则 `TAKEN→EXPIRED`，红线 9）+ 关单站内信；**不涉及退款**。
 
 ### 4.5 退号（B5）
 
