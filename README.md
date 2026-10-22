@@ -124,6 +124,18 @@ pnpm dev                                              # 8083，dev 代理已指�
 
 超管登录 `admin`（密码见框架初始化脚本）。
 
+移动端（`app` 仓，可选）：
+
+```bash
+cd app
+pnpm install
+pnpm dev:h5        # H5：http://localhost:8084（/dev-api 代理到 8082）
+pnpm dev:mp-wsl    # 小程序：产物输出到 D:\programming\project\appt-app，开发者工具导入该目录
+```
+
+- `dev:mp-wsl` 供「源码在 WSL、开发者工具在 Windows」使用；小程序端不走 vite 代理，脚本已把 `VITE_APP_BASE_API` 覆盖为 `http://localhost:8082`，路径与地址可分别用 `APPT_MP_OUT_DIR` / `APPT_MP_BASE_API` 覆盖；
+- 开发者工具导入后勾「不校验合法域名、web-view、TLS」。
+
 ### 4. 演示入口
 
 | 角色 | 入口 | 能演示什么 |
