@@ -66,9 +66,7 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 | `SLOT_GONE` | 号源已被预约或已消失（并发防线②③失败） | §4 B1 |
 | `SCHEDULE_SUSPENDED` | 该排班已停诊，不可预约 | §4 B1 |
 | `OUT_OF_WINDOW` | 不在可约窗口 [今日+1, 今日+7] | §4 B1 |
-| `LIMIT_HOLD_MAX` | 同时持有有效预约已达 3 单上限（账号口径） | §4 B1 |
-| `LIMIT_DEPT_DAY` | 同一就诊人同科室同日已挂 | §4 B1 |
-| `LIMIT_TIME_CONFLICT` | 同一就诊人同一时间点已挂其他医生 | §4 B1 |
+| `LIMIT_PATIENT_DAY` | 同一就诊人同一就诊日已有预约（跨科室、跨医生都算；比原来的「同科室同日」更严） | §4 B1 |
 | `BLACKLISTED` | 账号处黑名单限制期 | §4 B1 |
 | `DUPLICATE_SUBMIT` | 幂等键命中，返回首次结果（**非失败语义**，前端直接展示首次结果） | §4 B1 |
 | `PAYMENT_CLOSED` | 支付单已关闭或不存在，不能支付 | §5 C2 / C3 |
@@ -397,12 +395,13 @@ POST /appt/patient/registration
 ② BEGIN
 ③ SELECT sys_user WHERE user_id = 当前用户 FOR UPDATE
    ——账号行锁：串行化同一用户的并发挂号，使 ④ 的检查精确
-④ 锁内精查：黑名单 / 有效预约计数（WAIT_PAY+BOOKED+SIGNED）≥ 3 /
-   号源 AVAILABLE + 排班未停诊 + 日期在窗口内
+④ 锁内精查：黑名单 / 该就诊人该就诊日是否已有有效预约（跨科室 /
+   跨医生都算，命中 LIMIT_PATIENT_DAY）/ 号源 AVAILABLE +
+   排班未停诊 + 日期在窗口内
 ⑤ INSERT registration（registration_no 预生成；status=WAIT_PAY；
    active_flag=1；fee = slot.fee 快照）
    撞 UNIQUE(slot_id, active_flag) → SLOT_GONE
-   撞限购联合唯一 → LIMIT_DEPT_DAY / LIMIT_TIME_CONFLICT
+   撞限购联合唯一 → LIMIT_PATIENT_DAY（同日重复预约）
 ⑥ UPDATE slot SET status=TAKEN, registration_id=? WHERE id=? AND status=AVAILABLE
    影响行数 0 → SLOT_GONE，整体回滚
 ⑦ INSERT payment（payment_no；amount = registration.fee；
@@ -446,7 +445,7 @@ timePoint
 **实现口径（2026-10-20，S3）**
 
 - **幂等命中不发 `DUPLICATE_SUBMIT` 错误码**：响应仍是 `code=200`，`data.duplicate=true` 表示回放首次结果（前端据此提示「已提交过」而不报错）。`DUPLICATE_SUBMIT` 只用于「同键请求正在处理中、暂无结果」的并发场景。
-- **限购判定顺序**：账号行锁内先查持有数（`LIMIT_HOLD_MAX`），再查同科室同日（`LIMIT_DEPT_DAY`），最后查同时间点（`LIMIT_TIME_CONFLICT`）；三条复合唯一索引仍保留，撞键时按索引名映射同一组错误码。
+- **限购口径（2026-10-23 变更）**：只保留「同一就诊人同一就诊日 1 单」（`patient_id + visit_date + active_flag=1`，跨科室/跨医生都算），命中返回 `LIMIT_PATIENT_DAY`。原「同时持有 ≤3」（`LIMIT_HOLD_MAX`）、「同科室同日」（`LIMIT_DEPT_DAY`）、「同时间点冲突」（`LIMIT_TIME_CONFLICT`）**不再返回**，常量保留仅为兼容历史日志；两条复合唯一索引仍保留，撞键统一映射为 `LIMIT_PATIENT_DAY`。
 - **账号行锁**：`SELECT user_id FROM sys_user WHERE user_id = ? FOR UPDATE`（单行、不 JOIN），使同一账号的并发挂号串行化。
 - **占位 TTL** = `payment.expire-minutes`（默认 15 分钟），与支付截止时间等长；成功后 key 保留至 TTL 自然过期，关闭/退号路径的主动释放归 S4/S6a。
 - **支付单**：本切片只落 `payment(WAIT_PAY)`，`expire_time = now + payment.expire-minutes`；支付动作与回调归 S4。

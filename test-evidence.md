@@ -472,3 +472,55 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 - **`scheduleId` 只回填在能一一对应的地方**：A6 恒有值；A5 仅 staffId 模式有值，deptId 模式恒 `null`（同午别多医生求和，单值无意义）。
 - **两处 UI 缺陷（本片已修，留档）**：① `wd-popup` 默认 `z-index:10` 低于底部固定条（20），弹层「保存」被遮挡 → 显式 `:z-index="1000"`；② 从医生主页进排班页却列全科医生 → 改「医生视角 / 科室视角」双口径（A5 staffId / deptId 模式随视角切换）。
 - **演示数据前提**：要让演示账号名下从 0 单开始，重跑 `backend/script/sql/appt_s7_business_seed.sql`。
+
+---
+
+## 14. S11 患者端辅助页 + 分诊台
+
+> 记录时间 2026-10-23。门禁 + 接口实测 + 两处口径收口（限购、站内信时间格式）+ 三处 UI 缺陷留档。
+
+### 14.1 门禁
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型 | `pnpm type-check` | 0 错（56 文件） |
+| 静态检查 | `pnpm lint`（`oxlint src`） | 0 warning / 0 error |
+| 构建 | `pnpm build:h5`（`UNI_OUTPUT_DIR` 临时目录，**未删 dist**） | DONE |
+| 后端编译 | `mvn -pl ruoyi-modules/appt -am clean compile` | OK |
+| 文档门禁 | `python3 script/doc_audit.py` | 5 项全 PASS |
+
+### 14.2 接口实测（真实加密登录直打）
+
+| 步骤 | 端点 | 观测 |
+|---|---|---|
+| B3 详情 | `GET /appt/patient/registration/{id}` | `visitCode=R20261022000001`、`timePoint=17:20`、`staff` 无 `deptId`（印证「再次预约」只能走医生主页） |
+| B5 退号 | `POST /appt/patient/registration/{id}/cancel` | `CANCELED_ACTIVE` + `refundNo=F20261023000001` + `WAIT_REFUND`；详情里 `refund.status=REFUNDED` |
+| B5 重复 | 同上 | `REG_STATE_INVALID`（当前预约状态不支持退号） |
+| D1→D2→D1→D3 | 收藏四步 | 0 条 → `true` → 1 条（带 `avatarUrl/clinicType/favoriteTime`）→ 删除成功 |
+| D5 / D4 | 未读数 / 列表 | `unread=6` → 6 条；`readFlag=false` 与不传分别可用 |
+| D6 三态 | `PUT /appt/patient/notice/{id}/read` | 未读→200、已读→200（幂等）、不存在→**404**「消息不存在」；未读数 6→5 |
+| E1 扫码签到 | `POST /appt/triage/sign` | `signType=SCAN`；同单再来一次 → `SIGN_WINDOW_CLOSED` |
+| E2 手动补签 | `POST /appt/triage/sign/manual`（`registrationId`） | `signType=MANUAL` |
+| E3 当日列表 | `GET /appt/triage/sign/list?date=` | 183 条，`campusName/deptName/timePoint` 齐全（`timePoint` 为完整时间戳，前端 `timePointText()` 归一） |
+| 限购·同日跨科室 | `POST /appt/patient/registration` | `400` + `bizCode=LIMIT_PATIENT_DAY`「同一就诊人同一天只能有一个预约」 |
+| 限购·不同日 | 同上（另一就诊日） | `200`，下单成功（印证「不再限制持有 3 单」） |
+| 站内信新文案 | 新下单产生的 `BOOK_SUCCESS` | 「挂号单 R20261023000010 已提交：2026-10-25 08:00 就诊。请于 2026-10-23 03:36 前完成支付…」——**无 `T`、无纳秒** |
+
+### 14.3 限购口径变更（2026-10-23）
+
+| 项 | 变更前 | 变更后 |
+|---|---|---|
+| 主规则 | 账号级「同时持有 ≤3」+ 同科室同日 1 + 同时间点不可冲突 | **同一就诊人同一就诊日 1 个预约**（跨科室、跨医生都算） |
+| 业务码 | `LIMIT_HOLD_MAX` / `LIMIT_DEPT_DAY` / `LIMIT_TIME_CONFLICT` | `LIMIT_PATIENT_DAY`（三条旧码 `@Deprecated`，不再返回） |
+| 并发 | 账号行锁内精查 + `uk_*` 兜底 | 同左（`uk_reg_patient_dept_date` / `uk_reg_patient_time` 撞键统一映射 `LIMIT_PATIENT_DAY`） |
+| DDL | — | **未改**（`(patient_id, visit_date)` 唯一索引需清存量，留待后续） |
+| 脚本 | `s3_b1_concurrency.sh` 断言 3/4/5 围绕旧三条码 | 第 3 项改「同日跨科室 → `LIMIT_PATIENT_DAY`」，第 4 项改「不同就诊日各下 1 单」，旧 `LIMIT_HOLD_MAX`/`LIMIT_TIME_CONFLICT` 断言删除 |
+
+### 14.4 边界与已知问题
+
+- **消息详情无端点**：契约 §6 只有 D4/D5/D6，详情数据由列表页写入 `uni.storage`（`appt_notice_<id>`）后跳转；**直接输 URL 打开会提示「消息不存在或已删除」**（无缓存）。如需深链，要加 `GET /appt/patient/notice/{id}`。
+- **E3 `timePoint` 仍是完整时间戳**：S6a 的 `SignListVo` 未加 `@JsonFormat`，前端 `timePointText()` 兜底；如需后端统一，与 B1/B2/B3 一样加注解即可。
+- **存量站内信仍含 `T`**：已落库的正文不会自动改写（本次只影响新消息）；如需清洗执行 `test-evidence` 或 ROADMAP 记录的 `REGEXP_REPLACE` 语句。
+- **本片未做**：加号登记（E4 后端未实现）、停诊上报页（S6b 后端已有，页面留后续）。
+- **三处 UI 缺陷（已修，留档）**：① `wd-popup` 默认 `z-index:10` 低于底部固定条（20）→「保存」被遮挡，显式 `:z-index="1000"`；② 医生页进排班却列全科 → 「医生视角 / 科室视角」双口径；③ **`@click="goAppointments"` 会把点击事件对象当第一参数传入**，落点意图被存成 `MouseEvent` → `activeTab` 无匹配、列表为空；改为 `@click="goAppointments()"` 并对意图做白名单校验。
+- **双角色验收**：分诊账号（`appt_triage`）访问 `/pages/triage/**` 正常，患者 tab 不渲染；患者账号访问分诊页被 guard 拦截。

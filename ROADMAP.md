@@ -42,7 +42,7 @@
 | **S8** | 患者辅助组：收藏 D1–D3 / 消息 D4–D6 / 分诊当日签到列表 E3 | uni-app（E5）前补齐最后 7 个 P1 端点 | docs / backend | — | — | **已完成 2026-10-21** |
 | **S9** | 就诊人管理 B6–B10（列表/新增/修改/删除/设默认） | E5 最后一个后端硬前置（B1 挂号必须传 `patientId`） | docs / backend | — | — | **已完成 2026-10-22** |
 | **S10** | 患者端主链路：登录 + 双角色骨架 + 首页/院区/科室/医生/排班/选时间/确认预约/支付/我的预约 | 可演示「挂号 → 支付 → 我的预约」全链路 | docs / app（+backend 两处补口） | uni-app（患者端） | — | **已完成 2026-10-22** |
-| **S11** | 患者端辅助页 + 分诊台：我的就诊人/我的医生/消息/预约详情（就诊码）/扫码签到/手动补签/当日签到列表 | 双角色页面全齐，接口全部有来源 | docs / app | uni-app（患者端 + 分诊台） | — | 未开始 |
+| **S11** | 患者端辅助页 + 分诊台：我的就诊人/我的医生/消息/预约详情（就诊码）/扫码签到/手动补签/当日签到列表 | 双角色页面全齐，接口全部有来源 | docs / app（+backend 两处口径收口） | uni-app（患者端 + 分诊台） | — | **已完成 2026-10-23** |
 
 **集成测试**（定义见 PRD §12，此处绑定切片）：
 - ① 50 并发争抢同一时间点，恰好 1 笔成功 —— S3（**2026-10-20 通过**：1 成交 / 49 `SLOT_GONE`）
@@ -174,16 +174,19 @@
 - [x] 实测 2026-10-22：`type-check` 0 错 / `lint` 0 错 / `build:h5` DONE；后端 `mvn -pl ruoyi-modules/appt -am test` 13 例全绿；接口链路用真实加密登录直打：A6 `periods[].scheduleId` 有值 → A7 出号 → B1 建单 `R20261022000001`（金额 `22.00`）→ C2 受理 `accepted=true` → C3 `PAID` → B2 `BOOKED` 1 条；B4 取消另一单 → `CLOSED`、二次调用幂等、号源可约数 8→8
 - [x] 本片后端补两处（均经用户批准）：A6 `periods[].scheduleId`（公开组此前无任何端点能给 A7 传参）；B4 `POST /appt/patient/payment/{paymentNo}/cancel`（契约 §4.4 早有定义、后端缺入口）+ 患者端三 VO `timePoint` 补 `@JsonFormat(pattern="HH:mm")` 对齐契约 §2.4
 
-### S11 患者端辅助页 + 分诊台（uni-app）
+### S11 患者端辅助页 + 分诊台（uni-app）—— 已完成 2026-10-23
 
 > **前置**：S10。接口来源：S9（就诊人）、S8（收藏 D1–D3 / 消息 D4–D6 / 签到列表 E3）、S6a（B5 退号、E1/E2 签到）。
 
-- [ ] 我的就诊人：列表 / 新增（证件号输入 + 脱敏回显）/ 修改 / 删除 / 设默认
-- [ ] 我的医生：收藏列表（分页）+ 取消收藏；医生主页可收藏/取消
-- [ ] 消息：列表（全部/未读 tab）+ 未读红点 + 点开标记已读
-- [ ] 预约详情：状态时间线 + 就诊码（`visitCode` 仅有效态）+ 退号（含截止提示 `REFUND_DEADLINE_PASSED` 的文案）
-- [ ] 分诊台：扫码签到（`registrationNo`）/ 手动补签 / 当日签到列表（按院区视觉分组）
+- [x] 我的就诊人：列表（默认置顶）/ 新增（证件号输入 + 脱敏回显）/ 改名 / 改证件（留空=不改，禁「只改类型不填号」）/ 删除 / 设默认
+- [x] 我的医生：收藏列表（20/页触底）+ 取消收藏（二次确认）；医生主页「收藏/已收藏」可点（未登录跳登录）
+- [x] 消息：全部 / 未读双 tab + 未读蓝点 + 点开进详情并标记已读 + tabBar 未读数角标（D5）
+- [x] 预约详情：状态头（状态色 12% 底）+ 就诊码（**`visitCode` 为准，仅有效态渲染**）+ 信息卡 + 退款块 + 退号（过「就诊前一日 23:00」置灰并给具体截止日）
+- [x] 分诊台：扫码签到（`registrationNo`，小程序）/ 手动补签（H5 主路径）/ 当日签到列表（按院区分组、前后 3 天可切、行内补签）
 - **验收**：双角色切换正常；分诊账号看不到患者 tab；退号后状态与退款入口正确
+- [x] 实测 2026-10-23：`type-check` 0 错 / `lint` 0 错 / `build:h5` DONE；后端 `mvn compile` + `doc_audit` 5 项全 PASS；接口链路真实登录直打：B3 详情（`visitCode=R2026…`、`timePoint=17:20`）、B5 退号（`CANCELED_ACTIVE` + `refundNo`，重复退号 `REG_STATE_INVALID`）、D1→D2→D1→D3、D5/D4、D6 三态（未读→200 / 已读→200 / 不存在→**404**）、E1 扫码签到 + 重复 `SIGN_WINDOW_CLOSED`、E2 手动补签、E3 当日 183 条
+- [x] 本片范围外的两处收口（用户点单）：**限购改为「同一就诊人同一天 1 个预约」**（`LIMIT_PATIENT_DAY`，原三条停用）+ **站内信时间格式去 `T`/纳秒、午别转中文**（`ApptDisplayUtils`）
+- **未做（明确不在本片）**：加号登记（E4 后端未实现）、停诊上报页（S6b 后端已有，页面留后续）、`我的就诊人`支持改证件类型同步改造以外的字段编辑
 
 ### 3.9 核心亮点 ↔ 切片 ↔ 验收证据
 
@@ -263,6 +266,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-20 | **S5 验收实测**：读压测 100 并发 ×1000 样本 ×3 轮 —— 单屏 SQL 冷启动 3 条 / 命中 2 条 / `db` 3.2 条（与医生数无关），`redis` p95 9.3ms、命中率 100%，`db` p95 10.6ms（差距 14%，落在波动内，默认保持 `redis`）；一致性 1000 次「挂号 → 超时关单回补」差值恒 0 + 删键不创建（`PASS=11 FAIL=0`）；回归 S3 `PASS=14`、S4 `PASS=21`；压测脚本修两处健壮性（跳过无人员的残留院区、`date +%s%N` 计时）与 token 兼容（`APPT_TOKEN` 或 `TOKEN`） | backend + docs 各一提交 |
 | 2026-10-20 | **S6a 开发轮（状态机闭环与售后链路）**：退号 B5（单柱 CAS + 回池 + 事务内建退款单 + 事务外渠道退款 + `CANCEL_SUCCESS` 站内信）、签到 E1/E2（`@SaCheckRole("triage")`，同一条状态边）、爽约+过期合并扫描（主批 + 全量兜底 + `NOSHOW_RECORD` 站内信 + `SlotStateService.expire` 余量 −1）、置完成 23:30、B2 我的预约列表 / B3 详情（就诊码、证件号脱敏）、后台手动退号 F10、任务手动重跑端点（白名单 4 任务）、`appt_s6a_seed.sql`（triage 角色/账号 + 两个按钮权限）、`s6a_state_machine.sh` | backend + admin + docs 各一提交 |
 | 2026-10-21 | **E 系列收尾（E2/E3/E4）**：E4 核查后直接销项（`appt_s0_cleanup.sql` 已含「AI控制台」且库内 15 个残留菜单 id 全为空、`pnpm-lock.yaml` 早已入库）；E2 新增 `backend/deploy`（compose 三件套 + `init-db.sh` 一键导 8 个 SQL，端口避让既有容器，SnailJob 标注为外部依赖）；E3 新增两个 GitHub Actions 工作流 + 首个单测 `SuspendScopeParserTest`（8 例全绿） | backend + admin + docs 各一提交 |
+| 2026-10-23 | **S11 患者端辅助页 + 分诊台**：5 屏落地（预约详情含就诊码与退号 / 我的就诊人 / 我的医生 / 消息列表+详情 / 分诊签到+当日列表）；顺带两处收口：**限购改「同一就诊人同一天 1 个预约」**（`LIMIT_PATIENT_DAY`，原「持有 3 单 / 同科室同日 / 同时间点」三条停用，`uk_*` 索引留作兜底）、**站内信时间格式去 `T` 与纳秒、午别转中文**（`ApptDisplayUtils`）；另修三处体验缺陷（`wd-popup` `z-index` 被底栏遮挡导致「保存」点不到、医生页进排班却列全科、支付回跳未落「已预约」tab）；全站文案统一为医院官方书面语（DESIGN §8.1 新增语气规则）。**踩坑**：`@click="fn"` 会把事件对象作为第一参数传入，落点意图被存成 MouseEvent → tab 全不匹配且列表为空 | app + backend + docs 各一提交 |
 | 2026-10-22 | **S10 患者端主链路（9 屏 + 两处后端补口）**：Phase 0 用 Stitch 审 4 屏并修订 `DESIGN.md`（hero 240rpx 消歧、§9.1 快捷科室口径、§9.3 无医生数、§9.4/§9.6 字段下调、§9.8 端点出处、§9.9 四 tab + 默认落点）；实现 9.1–9.9 与基座（`store/booking`、`api/appt/{public,patient,payment}`、`utils/appt`、`useAsyncData`、6 个公共组件、`styles/appt.scss`）；后端补 A6 `periods[].scheduleId` + B4 待支付取消端点 + 患者端三 VO `timePoint` 加 `@JsonFormat(pattern="HH:mm")`。**踩坑四条**：`wd-popup` 默认 `z-index:10` 被底部固定条（20）压住 →「保存」点不到、从医生页进排班页却列全科医生（改医生/科室双视角）、tabBar 页带不了 query（落点改走 store 一次性意图）、`timePoint` 契约与实现不一致 | app + backend + docs 各一提交 |
 | 2026-10-22 | **E5 设计规范**：`app/DESIGN.md` 十个页面 blueprint + 11 段 Stitch prompt + 8 状态色映射 + 12 类组件规格 + 10 条禁止项；README/AGENTS 加指向。用 Google Stitch 实跑 9.1 首页验证：主题色（#1F7A8C）与结构还原正常，但 Stitch 自行加入「步行距离 / 专病门诊 / 医保定点 / 今日有号」等契约外字段与装饰纹样 —— 前者由 §10「不臆造字段」覆盖，后者已补进禁止项 | app 2 提交（`2c753f1` / `89c6e20`，均已推送） |
 | 2026-10-22 | **S9 就诊人管理**：患者端 `/appt/patient/patient/**` 五个端点（列表/新增/修改/删除/设默认）+ `PiiUtils` 统一脱敏 + 2 个新错误码 + `PiiUtilsTest`(5 例) + `s9_patient_crud.sh`；`PASS=23 FAIL=0`。**实跑方式**：因 token 过期，用 `GET /auth/code` 的 uuid 从 Redis 读验证码后完成一次真实加密登录再跑脚本 | backend + docs 各一提交 |
@@ -342,6 +346,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
 | v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
 | v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
+| v0.5.7 | 2026-10-23 | **S11 患者端辅助页 + 分诊台落地**：`app` 新增 5 屏（9.10 预约详情·就诊码 / 我的就诊人 / 我的医生 / 消息+详情 / 分诊签到·当日列表）+ `useUnreadBadge` + 3 个 API 文件，`DESIGN.md` 补 §8.1 语气规则、§8.2 文案表重写、§8.3 固定文案、§9.10 回调 Stitch 4 处；`backend` 限购改为「同一就诊人同一天 1 单」（`LIMIT_PATIENT_DAY`，三条旧码 `@Deprecated`）、站内信时间/午别格式化（`ApptDisplayUtils`）；契约 §2.2/§4.1 与 PRD §6.5 同步；`s3_b1_concurrency.sh` 限购断言改写；ROADMAP S11 全项勾选 + 实测；`test-evidence.md` §14 |
 | v0.5.6 | 2026-10-22 | **S10 患者端主链路落地**：`app` 新增 9 屏页面 + 基座（store/composable/utils/6 组件/全局 token），`DESIGN.md` 六处规范修订；`backend` 补 A6 `periods[].scheduleId`（A7 唯一入参来源）与 B4 取消端点（契约早有定义、实现缺入口），患者端 B1/B2/B3 `timePoint` 补 `@JsonFormat` 对齐契约 §2.4；契约 §3.5/§3.6/§4.4/§2.4 字段级回填；ROADMAP S10 全项勾选 + 实测；`test-evidence.md` §13 |
 | v0.5.5 | 2026-10-22 | **移动端设计规范落地（E5 配套）**：`app/DESIGN.md`（约 450 行）——15 个色板 token（含用途与禁止用途）、挂号 8 状态色映射（唯一出处）、字号/间距/圆角/阴影阶梯、12 类组件规格（只用实测存在的 Wot UI 2.x 组件）、S10 十屏 blueprint（含契约字段出处与四态）+ 11 段可直接粘贴的 Stitch prompt、业务码→中文唯一映射、10 条禁止项；`app/README.md` 与 `AGENTS.md` 加指向。**Stitch 实测反馈**：9.1 首页出图确认主色与 token 生效，但它自行加入距离/专病门诊/「今日有号」等契约外字段与装饰圆点/波纹 → 已并入 §10 禁止项第 2 条 |
 | v0.5.4 | 2026-10-22 | **S9 就诊人管理落地**：契约 §2.2 +2 码、§4.6/§4.7 字段级、§4.8 转正、§10 去占位；PRD §4.2-6 实现进度；ROADMAP S9 全项勾选与实测；`PiiUtils` 抽公共脱敏（口径收紧为「<12 全遮」）；复核生成器侧 `status` 语义（结论：写法正确，坑位已入 AGENTS） |
