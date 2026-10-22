@@ -429,4 +429,4 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 - **演示期证件号明文**（`appt.security.id-no.encrypt=false`）：脚本不断言密文，只断言「hash 为 64 位十六进制」与「响应不含原文」；生产打开加密开关无需改代码。
 - **10 人是软上限**：count-then-insert，极端并发可能超出 1~2 人；单账号正常操作不会触发。
 - **删除不转移默认**：删掉默认就诊人后账号可暂时没有默认，由前端提示用户重选。
-- **仅报告未修**：生成器侧的 `ApptPatientServiceImpl.insertByBo` 用 `Boolean.TRUE.equals(status)` 判「已存在启用行」，而 RuoYi `'0'`（正常）映射为 `false`，语义相反；患者侧实现按正确语义，后台那份建议单开修复项。
+- **`status` 语义（2026-10-22 复核修正）**：原先记录「生成器 `insertByBo` 判反」的说法**不成立**——库列 `char(1)` 中 `'0'`=正常映射 `false`、`'1'`=停用映射 `true`，故 `Boolean.TRUE.equals(status)` 判「停用行」是正确的；`RegistrationBookingService` 亦已校验停用就诊人。结论已写入 `backend/AGENTS.md` §6，而 RuoYi `'0'`（正常）映射为 `false`，语义相反；患者侧实现按正确语义，后台那份建议单开修复项。

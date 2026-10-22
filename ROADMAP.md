@@ -160,7 +160,7 @@
 - [x] 脱敏统一：抽出 `common/PiiUtils.maskIdNo`（前 4 + 10 个 `*` + 后 4，**长度 < 12 全遮**），`RegistrationQueryService` 改为调用它
 - [x] 单测：`PiiUtilsTest`（5 例：18 位掩码 / <12 全遮 / 空值 / 加密后解密再掩码 / hash 确定性）
 - [x] 验收 2026-10-22：`s9_patient_crud.sh` **`PASS=23 FAIL=0 SKIP=0`**（列表 / 新增默认互斥 / 查重 / 留空不改 / 改号重算 / 越权 404 / 有效预约拒删 / 10 人上限 / 设默认幂等 / 清理）
-- [x] 已知缺陷（只记不修）：生成器 `ApptPatientServiceImpl.insertByBo` 用 `Boolean.TRUE.equals(status)` 判「已存在启用行」，而 RuoYi `status='0'`（正常）映射为 `false`，语义反了——患者侧按正确语义实现，后台那份建议单开修复项
+- [x] **`status` 语义复核（2026-10-22）**：S9 报告里曾说生成器 `ApptPatientServiceImpl.insertByBo` 的 `Boolean.TRUE.equals(status)` 判反了——**复核结论：写法正确**（库列 `char(1)`，`'0'`=正常映射 `false`、`'1'`=停用映射 `true`）。`RegistrationBookingService` 也早已校验「就诊人已停用」（B1 第 4 步），无需新增改动；该语义坑已写入 `backend/AGENTS.md` §6，避免再读反
 
 ### S10 患者端主链路（uni-app）
 
@@ -340,7 +340,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
 | v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
 | v0.5.5 | 2026-10-22 | **移动端设计规范落地（E5 配套）**：`app/DESIGN.md`（约 450 行）——15 个色板 token（含用途与禁止用途）、挂号 8 状态色映射（唯一出处）、字号/间距/圆角/阴影阶梯、12 类组件规格（只用实测存在的 Wot UI 2.x 组件）、S10 十屏 blueprint（含契约字段出处与四态）+ 11 段可直接粘贴的 Stitch prompt、业务码→中文唯一映射、10 条禁止项；`app/README.md` 与 `AGENTS.md` 加指向。**Stitch 实测反馈**：9.1 首页出图确认主色与 token 生效，但它自行加入距离/专病门诊/「今日有号」等契约外字段与装饰圆点/波纹 → 已并入 §10 禁止项第 2 条 |
-| v0.5.4 | 2026-10-22 | **S9 就诊人管理落地**：契约 §2.2 +2 码、§4.6/§4.7 字段级、§4.8 转正、§10 去占位；PRD §4.2-6 实现进度；ROADMAP S9 全项勾选与实测；`PiiUtils` 抽公共脱敏（口径收紧为「<12 全遮」）；记录生成器侧 `status` 语义缺陷 |
+| v0.5.4 | 2026-10-22 | **S9 就诊人管理落地**：契约 §2.2 +2 码、§4.6/§4.7 字段级、§4.8 转正、§10 去占位；PRD §4.2-6 实现进度；ROADMAP S9 全项勾选与实测；`PiiUtils` 抽公共脱敏（口径收紧为「<12 全遮」）；复核生成器侧 `status` 语义（结论：写法正确，坑位已入 AGENTS） |
 | v0.5.3 | 2026-10-22 | **E5 建仓（移动端骨架）**：新建 `qd-appt-app`（uni-app+vite-ts+Wot UI 2.x），落地 I1–I5 与 6 个骨架页，四条 DoD 全绿；backend 补 `appt_e5_client_access.sql`（app 客户端 access_path 放行，注明需重新登录）；ROADMAP §7 E5 勾选并记录实测版本 |
 | v0.5.2 | 2026-10-21 | **新增文档一致性门禁**：`docs/script/doc_audit.py`（过期表述 / §2 与 §3 状态传播 / test-evidence 章节编号 / 契约 P1 清单 / 复用字典审计）+ docs CI；AGENTS §5 改写为 Definition of Done（状态传播表 + 「未来时须带归属」+ §8 为历史快照）；顺带修正 S1「三条约束」父项、S2 停诊登记、S3 患者端页面三处遗留项的归属标注 |
 | v0.5.1 | 2026-10-21 | **排片：新增 S9 / E5 收窄 / 新增 S10·S11**：S9 = 就诊人管理 B6–B10（E5 前最后一个后端硬前置，B1 挂号依赖 `patientId`）；E5 收窄为「建仓 + 脚手架」（E 系列只管工程基线），页面拆为 **S10 患者端主链路**、**S11 辅助页 + 分诊台**；记录小程序现状（未备案/未认证 → 仅开发与体验版可用） |
