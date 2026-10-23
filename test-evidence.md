@@ -571,3 +571,44 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 | `CAMPUS_DATE` | `scopeValue` 规范化为 `campusId:日期`；处理后按院区展开，排班停诊 + 被动退号 + 退款 |
 
 造数保护：日期取 **+40 / +41 天**（避开种子窗口 +1~+7），处理前先校验该医生/院区当天除自造排班外无其他排班，否则 `SKIP` 而不是误停演示数据；脚本退出自动清理（实测 `appt_schedule` / `appt_registration` / `appt_blacklist` 归零）。
+
+---
+
+## 15. 小程序端真机验证（2026-10-23）
+
+> 目标：把 H5 已验证的「分诊扫码签到」搬到微信小程序真机。结论：**代码层 bug（不是网络/配置）**，已修。
+
+### 15.1 现象与定位
+
+| 现象 | 判断 |
+|---|---|
+| 开发者工具模拟器正常渲染；真机（微信 8.0.66 / 基础库 3.17.5）除导航栏与 tabBar 外**全白**，连首页品牌区的静态文字都没有 | 不是接口问题（否则会显示错误态和「重试」），是**页面 JS 没执行** |
+| 真机调试 Console | `ReferenceError: TextEncoder is not defined`，栈为 `crypto.js:4 → request.js:4 → pages/triage/sign/index.js`（`pages/triage/list`、`pages/triage/suspend` 同样） |
+| 网络侧 | `Test-NetConnection 172.31.124.129 -Port 8082` 与 `192.168.0.108 -Port 8082` 均 `True`，`netstat` 见 `0.0.0.0:8082 LISTENING` —— 与网络无关 |
+
+**根因**：小程序 JS 引擎没有 `TextEncoder/TextDecoder`。`utils/crypto.ts` 在**模块顶层** `new TextEncoder()`，而它被 `utils/request.ts` 顶层 import、`request` 又被几乎所有页面顶层 import → 页面模块在**求值阶段**抛错，组件树不渲染；导航栏与 tabBar 是原生的，所以仍在。
+
+### 15.2 修复与验证
+
+- `crypto.ts` 改为纯 JS UTF-8 编解码（含代理对/emoji），`encoder/decoder` 仍是 `{ encode, decode }` 形状，调用方无感知
+- Node 直接跑 `src/utils/crypto.ts`：AES(ECB) 往返 **4/4 PASS**（`hello`、中文、emoji 混排、JSON），base64 往返 PASS
+- `build:mp-weixin` 产物中 `TextEncoder/TextDecoder` 引用数 **0**
+- 全仓扫描 `btoa/atob/Blob/FileReader/document/window`：除注释外无其他 Web API 依赖
+
+### 15.3 顺带修掉的两处配置（都会造成「看起来是白屏」的假象）
+
+| 项 | 问题 | 修法 |
+|---|---|---|
+| `manifest.json → mp-weixin.setting` | 生成的 `project.config.json` 只有 `es6:true`，缺 `enhance`（增强编译），产物里的 `??` / `?.`（`pages/` 内 47 处）不会被降级 | 补 `es6 / enhance / postcss / minified`，已验证产物 `project.config.json` 含 `enhance:true` |
+| `dev:mp-wsl` 的 baseApi | 默认 `http://localhost:8082`（真机指手机自己）；曾一度被改成本机 IP 时误删成 `http://:8082` → 微信报 `invalid url "http://:8082/..."` | 默认改为本机网卡 `http://192.168.0.108:8082`，可用 `APPT_MP_BASE_API` 覆盖 |
+
+### 15.4 WSL2 下让手机访问后端（Win10 无 `networkingMode=mirrored`）
+
+- 手机 → Windows 网卡 → WSL 需要 `netsh interface portproxy`，且 `connectaddress` **必须填 WSL 的 IPv4**（如 `172.31.124.129`）。填 `127.0.0.1` 会失败：Windows 的 `localhost` 优先走 `::1`，WSL 的 localhost 转发落在 IPv6 回环，IPv4 回环上没有监听（实测 `127.0.0.1:8082` 不通、`localhost:8082` 通）
+- WSL 重启后 IPv4 会变，`portproxy` 需重加；长期方案是 Win11 的 `networkingMode=mirrored`
+- 验证顺序：手机浏览器先打开 `http://<局域网IP>:8082/appt/public/campus/list` 看到 JSON，再开小程序
+
+### 15.5 遗留
+
+- `utils/encrypt.ts` 顶层 import `jsencrypt`（依赖 `window/navigator`）。真机未复现（该库内部有 `typeof navigator` 守卫），但只在登录时用，后续应改 `await import('jsencrypt')` 动态加载，避免进启动链路
+- 扫码签到本机已验证到「登录 + 页面可渲染」，**扫码动作本身待真机复测**（需真实 AppID + 后端可达；`manifest` 里的 AppID 属个人配置，不入库）
