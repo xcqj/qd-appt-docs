@@ -623,7 +623,11 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 
 结论：**小程序端「扫一扫 → E1 → 签到」端到端可用**，与 H5 手动补签（E2）共用同一状态机。
 
-### 15.6 遗留
+### 15.6 两条遗留已收口（2026-10-23）
 
-- `utils/encrypt.ts` 顶层 import `jsencrypt`（依赖 `window/navigator`）。真机未复现（库内部有 `typeof navigator` 守卫），但只在登录时用，后续应改 `await import('jsencrypt')` 动态加载，避免进启动链路
-- `request.ts` 在「statusCode 非 2xx 且 body 为空」时只报「响应为空」，丢了 HTTP 状态码（本次排查被误导过一轮），建议改为「服务不可达（404）· 请检查接口地址」
+| 项 | 处理 | 验证 |
+|---|---|---|
+| `utils/encrypt.ts` 顶层 import `jsencrypt` | `rsaEncrypt` 改 `async` + `await import('jsencrypt')`，只在登录时构造实例；`postEncrypted` 随之 async（返回仍是 Promise，调用方无感） | H5 产物已拆出独立 chunk `assets/..-node_modules-jsencrypt-lib-index.*.js`，`index.html` 不预加载；`pickCtor` 覆盖三种导出形态（ESM 命名 / ESM interop `default` / **CJS 直接是构造器**），三种各自跑通 `new + setPublicKey + encrypt`（len=172） |
+| `request.ts` 空 body 吞掉状态码 | 200 → 「响应为空，请稍后重试」；非 200 → 「服务不可达（404），请检查接口地址或网络」，非 silent 时 toast | `type-check` / `lint` / `build:h5` / `build:mp-weixin` 全绿 |
+
+> `jsencrypt` 的 CJS 产物 `typeof module.exports === 'function'`（没有 `.JSEncrypt`、没有 `.default`），原先的 `import { JSEncrypt }` 依赖的是它的 ESM 构建；改成动态 import 后必须按打包器的 interop 形态兜底，否则小程序端会拿到一个函数却取不到构造器。
