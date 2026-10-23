@@ -627,7 +627,8 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 
 | 项 | 处理 | 验证 |
 |---|---|---|
-| `utils/encrypt.ts` 顶层 import `jsencrypt` | `rsaEncrypt` 改 `async` + `await import('jsencrypt')`，只在登录时构造实例；`postEncrypted` 随之 async（返回仍是 Promise，调用方无感） | H5 产物已拆出独立 chunk `assets/..-node_modules-jsencrypt-lib-index.*.js`，`index.html` 不预加载；`pickCtor` 覆盖三种导出形态（ESM 命名 / ESM interop `default` / **CJS 直接是构造器**），三种各自跑通 `new + setPublicKey + encrypt`（len=172） |
+| `utils/encrypt.ts` 顶层 import `jsencrypt` | **一度改成 `await import()`，已回滚**（见下方「回滚原因」）；保持静态 import，`rsaEncrypt` 同步 | 静态引用下产物为 `require("../common/vendor.js")` + `new n.JSEncrypt`，真机可登录 |
+| ~~回滚原因~~ | 小程序登录报 `"/common/vendor.js" is not a function` | uni-app 的 **mp-weixin 构建把动态 `import()` 编译成 `require(...)` 再 `.then(...)`**，而 `require` 返回模块对象不是 Promise → 登录必崩。H5 的分包收益远小于这个坑，且 `jsencrypt` 内部有 `typeof navigator` 守卫、真机本就不崩 |
 | `request.ts` 空 body 吞掉状态码 | 200 → 「响应为空，请稍后重试」；非 200 → 「服务不可达（404），请检查接口地址或网络」，非 silent 时 toast | `type-check` / `lint` / `build:h5` / `build:mp-weixin` 全绿 |
 
 > `jsencrypt` 的 CJS 产物 `typeof module.exports === 'function'`（没有 `.JSEncrypt`、没有 `.default`），原先的 `import { JSEncrypt }` 依赖的是它的 ESM 构建；改成动态 import 后必须按打包器的 interop 形态兜底，否则小程序端会拿到一个函数却取不到构造器。
