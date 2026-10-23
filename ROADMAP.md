@@ -204,7 +204,7 @@
 > **前置**：S11（三端页面已齐）。目标是把"能用的 demo"变成"有品牌感的产品"。
 > 视觉口径一律以 `app/DESIGN.md` 为准，本片新增的 logo 用法、图标规格、配色沿用规则需同步回 DESIGN。
 
-- [ ] **品牌资产**：主 logo（SVG + 反白版）+ `favicon.ico` + 小程序封面图；落在 `app/src/static/`、`admin/src/assets/logo/`、`admin/public/`
+- [ ] **品牌资产**：**母标已定 `A3c`「十字牌 · 点阵」**（2026-10-24 选定，规格见 `app/DESIGN.md` §12）；导出 SVG + 反白版 + `favicon.ico` + 小程序封面图，落在 `app/src/static/`、`admin/src/assets/logo/`、`admin/public/`
 - [ ] **移动端 tabBar 图标**：4 项 × 选中/未选中共 8 个（81×81 PNG，@1x/@2x/@3x），替换 `pages.json` 里纯文字的 tabBar；H5 与小程序一致
 - [ ] **患者端首屏抛光**：首页 / 预约详情 / 我的 三屏——间距节奏、字号阶梯、卡片阴影、点击态、骨架与空态
 - [ ] **后台品牌**：`VITE_APP_TITLE`、`VITE_APP_LOGO_TITLE`、登录页标题与文案、页脚、`<title>`；全站不得再出现 `RuoYi` 字样
@@ -342,6 +342,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-20 | **S6a 开发轮（状态机闭环与售后链路）**：退号 B5（单柱 CAS + 回池 + 事务内建退款单 + 事务外渠道退款 + `CANCEL_SUCCESS` 站内信）、签到 E1/E2（`@SaCheckRole("triage")`，同一条状态边）、爽约+过期合并扫描（主批 + 全量兜底 + `NOSHOW_RECORD` 站内信 + `SlotStateService.expire` 余量 −1）、置完成 23:30、B2 我的预约列表 / B3 详情（就诊码、证件号脱敏）、后台手动退号 F10、任务手动重跑端点（白名单 4 任务）、`appt_s6a_seed.sql`（triage 角色/账号 + 两个按钮权限）、`s6a_state_machine.sh` | backend + admin + docs 各一提交 |
 | 2026-10-21 | **E 系列收尾（E2/E3/E4）**：E4 核查后直接销项（`appt_s0_cleanup.sql` 已含「AI控制台」且库内 15 个残留菜单 id 全为空、`pnpm-lock.yaml` 早已入库）；E2 新增 `backend/deploy`（compose 三件套 + `init-db.sh` 一键导 8 个 SQL，端口避让既有容器，SnailJob 标注为外部依赖）；E3 新增两个 GitHub Actions 工作流 + 首个单测 `SuspendScopeParserTest`（8 例全绿） | backend + admin + docs 各一提交 |
 | 2026-10-23 | **两条遗留收口**：① `request.ts` 空 body 不再吞状态码，非 200 报「服务不可达（404），请检查接口地址或网络」并 toast —— 正是这次被 QQ 占用 8082 误导的那条文案；② `jsencrypt` 一度改动态加载，**随即回滚**（见下一行） | app + docs 各一提交 |
+| 2026-10-24 | **Logo 方向筛选与决策（未开工，仅定方案）**：出 13 个候选（A 号牌族 / B 字母 Q / C 日历族），逐个渲染三色态比对，淘汰 `A3e`（叠层会把挖空填平）、`A3f`（近圆+底部缺口读作聊天气泡）、`B2`（十字断口像救生圈）、`B4`（缺口像破损）；**选定 `A3c` 十字牌·点阵为母标**，并确定 responsive logo 三档简化规则（≥48 完整 / 24–48 去点阵 / ≤24 仅十字）。同时把「Stitch 只作版式参考、必做四类回调、结论回写 DESIGN」固化为 `app/DESIGN.md` §13。**踩坑**：多张 SVG 内联时 `<mask id>` 重名会让所有图形共用第一个 mask → 改用 `fill-rule="evenodd"` 挖空 | app + docs 各一提交 |
 | 2026-10-24 | **交付阶段规划（S12–S16）**：功能阶段 S1–S11 结束，按"先做不依赖服务器的、且演示当天能被看见的"排出六个切片——S12 品牌与首屏（logo / tabBar 图标 / 后台首页换运营看板）、S12.5 全站视觉统一（后台主题+表格+状态、移动端剩余 7 屏）、S13 门面与物料（根 README / DEMO 剧本 / 脚本化截图 / ADR）、S14 一键演示（`demo.sh` + 镜像 workflow）、S15 医院感细节（流程条 / 院区信息 / 须知页）、S16 线上部署（阻塞：服务器）。明确不做：微服务拆分、K8s、真实支付、多租户、i18n、暗色模式 | docs 提交 |
 | 2026-10-24 | **收尾两处偏差**：① `SignListVo` / `SignResultVo` 的 `timePoint` 补 `@JsonFormat(pattern="HH:mm")` —— 此前 E1/E2/E3 返回完整时间戳、与契约 §2.4「对外恒为 HH:mm」不一致（靠前端 `timePointText()` 兜底）；补齐后全仓 `timePoint` 统一，`signTime` 仍保留完整时间戳（事件时间，前端 `shortDateTime()` 渲染）。② `deploy/docker-compose.yml` 的 `mysql`(3307) / `minio`(9010-9011) 标注**当前未启用**（复用宿主机 `blog-mysql:3306` 与外部 MinIO，后端也仍指向它们），并写明启用前需同步 `application-dev.yml`；`deploy/README.md` 同步 | backend + app + docs 各一提交 |
 | 2026-10-23 | **全项目体检轮（限购改口径后的回归补齐）**：`s3_b1_concurrency.sh` 实跑 **`PASS=11 FAIL=0`**（原 14 条因「限购三条」合并为一条而减少；同日跨科室 `LIMIT_PATIENT_DAY`、不同就诊日各 1 单均验证），并修脚本头部说明与章节跳号（3→4→6 改为 3→4→5）；`s8_patient_aux.sh` 实跑发现 **1 处不兼容**（第二笔下单假设可同日下两单；收尾退号深夜必失败导致残留单抬高下一轮限购）→ 改为「第二笔换就诊日 + 前/后置 SQL 作废回池 + `window_slot` 按就诊人口径排除」，复跑 **`PASS=29 FAIL=0 SKIP=0`**；`s9_patient_crud.sh` 复跑 **`PASS=23 FAIL=0`** | backend + docs 各一提交 |
@@ -433,6 +434,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
 | v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
 | v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
+| v0.6.1 | 2026-10-24 | **母标定版与设计协作规则**：`DESIGN.md` 新增 §12「品牌与图标」（A3c 母标几何参数、responsive logo 三档、导出清单、禁止事项）与 §13「Stitch 使用边界」（定位 / 四类回调 / 四步流程 / 记录位置）；ROADMAP S12 标注母标已定 |
 | v0.6.0 | 2026-10-24 | **进入交付阶段**：新增 S12（品牌与首屏）/ S12.5（全站视觉统一）/ S13（门面与物料）/ S14（一键演示）/ S15（医院感细节）/ S16（线上部署，阻塞于服务器）六个切片，含范围、验收标准与依赖顺序；明确"不做"清单（微服务 / K8s / 真实支付 / 多租户 / i18n / 暗色）；`docs/README.md` 仓库状态与启动说明同步 |
 | v0.5.18 | 2026-10-24 | **收尾偏差**：分诊 `SignListVo`/`SignResultVo` 补 `@JsonFormat(HH:mm)`（全仓 timePoint 统一，`signTime` 保持完整时间戳）；compose 的 mysql/minio 标注未启用并说明启用前置；契约 §2.4 补注记；前端注释同步 |
 | v0.5.17 | 2026-10-23 | **体检轮**：`s3` 复跑 `PASS=11`（限购合并后断言数 14→11，脚本头部与章节号修正）；`s8` 修限购兼容与清理策略后复跑 `PASS=29 FAIL=0 SKIP=0`；`s9` 复跑 `PASS=23 FAIL=0`；`test-evidence` §11.3 记录 s8 的三处修法 |
