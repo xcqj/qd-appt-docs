@@ -98,6 +98,8 @@ appt:xxx:yyy   管理端点按钮权限，标识遵循 appt:资源:动作
 | 金额 | JSON 字符串，两位小数 | `"22.00"` |
 
 > **实现口径（2026-10-22，S10）**：患者端 B1 / B2 / B3 三个响应 VO 的 `timePoint` 类型是 `LocalDateTime`，此前未加格式注解，实际序列化成 `2026-10-23 17:20:00`（与本节冲突）。已在这三个 VO 上加 `@JsonFormat(pattern = "HH:mm")`，对外恒为 `HH:mm`；前端仍保留 `timePointText()` 做防御性归一（两种形态都能吃），避免灰度期出现 `10月23日 2026-10-23 17:20:00` 这类拼接。
+>
+> **分诊侧补齐（2026-10-24）**：E3 `SignListVo.timePoint` 与 E1/E2 `SignResultVo.timePoint` 同样漏了注解（此前返回完整时间戳，靠前端兜底），现已补 `@JsonFormat(pattern = "HH:mm")`，**全仓 `timePoint` 对外统一为 `HH:mm`**。注意 `signTime`（实际签到时刻）仍返回完整时间戳——它是事件时间而非展示线值，前端用 `shortDateTime()` 渲染。
 
 ### 2.5 幂等与防重
 
