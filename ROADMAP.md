@@ -82,7 +82,7 @@
 
 - [x] 三道防线：Redis 占位 → DB CAS → 唯一索引兜底 —— 2026-10-20：`SlotStateService`（`SET NX EX 15min` 占位 / `AVAILABLE→TAKEN` CAS + 台账 / Lua 比对 value 安全释放；Redis 异常降级为纯 DB）
 - [x] 限购三条（同人同时段 / 同人同科室同日 / 号源唯一）—— 2026-10-20：`sys_user` 账号行 `FOR UPDATE` 串行化 + 锁内精查（精确错误码）+ 三条复合唯一索引兜底
-- [x] 集成测试① —— 2026-10-20 实测通过：`PASS=14 FAIL=0 SKIP=0`（50 并发 1 成交 + 49 `SLOT_GONE`；同 key 双击 `duplicate=true` 且仅 1 单；限购三条各命中对应码；窗口外 `OUT_OF_WINDOW`；占位键存在），脚本 `backend/script/test/s3_b1_concurrency.sh`
+- [x] 集成测试① —— 2026-10-23 复跑通过：`PASS=11 FAIL=0 SKIP=0`（50 并发 1 成交 + 49 `SLOT_GONE`；同 key 双击 `duplicate=true` 且仅 1 单；**限购改为「同一就诊人同一就诊日 1 单」后同日跨科室被 `LIMIT_PATIENT_DAY` 拦下、不同就诊日各下 1 单均可成功**；窗口外 `OUT_OF_WINDOW`；占位键存在）。断言数由 14 → 11 是因为原「限购三条」合并为一条规则，脚本 `backend/script/test/s3_b1_concurrency.sh`
 - [x] 降级对照实验 —— 2026-10-20：`--appt.slot-hold.enabled=false` 摘除防线① 后重跑，仍 `PASS=14 FAIL=0`（1 成交 / 49 由 DB CAS 拒绝，无占位键），证据见 `test-evidence.md` §3
 - [ ] 患者端主链路页面（uni-app）—— **归 S10**（2026-10-21 排片），本项不再在 S3 跟踪
 
@@ -269,6 +269,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-20 | **S6a 开发轮（状态机闭环与售后链路）**：退号 B5（单柱 CAS + 回池 + 事务内建退款单 + 事务外渠道退款 + `CANCEL_SUCCESS` 站内信）、签到 E1/E2（`@SaCheckRole("triage")`，同一条状态边）、爽约+过期合并扫描（主批 + 全量兜底 + `NOSHOW_RECORD` 站内信 + `SlotStateService.expire` 余量 −1）、置完成 23:30、B2 我的预约列表 / B3 详情（就诊码、证件号脱敏）、后台手动退号 F10、任务手动重跑端点（白名单 4 任务）、`appt_s6a_seed.sql`（triage 角色/账号 + 两个按钮权限）、`s6a_state_machine.sh` | backend + admin + docs 各一提交 |
 | 2026-10-21 | **E 系列收尾（E2/E3/E4）**：E4 核查后直接销项（`appt_s0_cleanup.sql` 已含「AI控制台」且库内 15 个残留菜单 id 全为空、`pnpm-lock.yaml` 早已入库）；E2 新增 `backend/deploy`（compose 三件套 + `init-db.sh` 一键导 8 个 SQL，端口避让既有容器，SnailJob 标注为外部依赖）；E3 新增两个 GitHub Actions 工作流 + 首个单测 `SuspendScopeParserTest`（8 例全绿） | backend + admin + docs 各一提交 |
 | 2026-10-23 | **两条遗留收口**：① `request.ts` 空 body 不再吞状态码，非 200 报「服务不可达（404），请检查接口地址或网络」并 toast —— 正是这次被 QQ 占用 8082 误导的那条文案；② `jsencrypt` 一度改动态加载，**随即回滚**（见下一行） | app + docs 各一提交 |
+| 2026-10-23 | **全项目体检轮（限购改口径后的回归补齐）**：`s3_b1_concurrency.sh` 实跑 **`PASS=11 FAIL=0`**（原 14 条因「限购三条」合并为一条而减少；同日跨科室 `LIMIT_PATIENT_DAY`、不同就诊日各 1 单均验证），并修脚本头部说明与章节跳号（3→4→6 改为 3→4→5）；`s8_patient_aux.sh` 实跑发现 **1 处不兼容**（第二笔下单假设可同日下两单；收尾退号深夜必失败导致残留单抬高下一轮限购）→ 改为「第二笔换就诊日 + 前/后置 SQL 作废回池 + `window_slot` 按就诊人口径排除」，复跑 **`PASS=29 FAIL=0 SKIP=0`**；`s9_patient_crud.sh` 复跑 **`PASS=23 FAIL=0`** | backend + docs 各一提交 |
 | 2026-10-23 | **回滚 `jsencrypt` 动态 import（小程序登录必崩）**：静态 `import { JSEncrypt }` 时正常；改成 `await import()` 后，uni 的 **mp-weixin 构建把 `import()` 编成 `require(...)` 再 `.then(...)`**，`require` 返回模块对象不是 Promise → 真机/工具登录报 `"/common/vendor.js" is not a function`。已回滚并在 `encrypt.ts` 注释里写明禁止原因；H5 分包收益远小于该坑 | app + docs 各一提交 |
 | 2026-10-23 | **小程序真机扫码签到验收通过**：微信 8.0.66 / 基础库 3.17.5，用真实 AppID + `portproxy` 18082；患者端详情二维码（`visitCode=R20261023000099`）→ 分诊端「扫一扫」→ E1 → `SIGNED` 成功，同一码二次扫报 `SIGN_WINDOW_CLOSED`。小程序链路与 H5 手动补签共用同一状态机，至此 S11 分诊台三项（签到/当日/停诊）全部端到端可用 | docs 提交 |
 | 2026-10-23 | **小程序真机联调的最后一道坎：Windows 8082 被 QQ 占用**：`Test-NetConnection` 通但接口 404 空 body、后端日志无请求 → `tasklist` 显示 `QQ.exe(31612)` 占 `0.0.0.0:8082`，`netsh portproxy` 静默绑定失败。改用 `listenport=18082`（→ WSL `172.31.124.129:8082`）后 `curl.exe` 返回 200；`dev:mp-wsl` 默认 baseApi 同步改为 `http://192.168.0.108:18082`，README 补「connectaddress 必须填 WSL IPv4」「空 body 404 = 端口被占」两条判定 | app + docs 各一提交 |
@@ -357,6 +358,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.3.8 | 2026-10-19 | 枚举三处副本对账：新增审计脚本 `backend/script/enum_sync_audit.py`（31 组常量 / 47 个注解字段 / 文档语料含 §2、契约 §2.7、技术方案 §3.6）。首跑修 8 处：`PAY_CHANNEL` 补 `alipay`、`CHECK_TYPE` 与 §3.6 对齐（**R6/R7 此前中文名错位**：余量偏差→停诊漏处理、缓存无源→余量缓存漂移）、新增 `SIGN_FLAG/REG_ACTIVE_FLAG/IS_DEFAULT` 常量与三页列表映射、清理 `staffFavoriteVo` 假注解；AGENTS 把脚本纳入枚举改动验证门槛 |
 | v0.4.0 | 2026-10-20 | **S2 文档**：S2 清单与切片表标完成、停诊登记改判 S6b、§3.9 放号窗口 ✅；契约 §8.2 补多模板仲裁（优先 `staff.clinic_type`，否则 id 最小）、生成不受窗口限制、批号形制、`skippedCount/arbitratedCount`、preview 全字段；技术方案 §1.4 补 `booking.release.compensate-after-time` |
 | v0.4.1 | 2026-10-20 | **S3 文档**：契约 §2.1 增「业务码在 `data.bizCode`」、§4.1 补实现口径（幂等回放 `duplicate=true`、限购判定顺序、账号行锁、占位 TTL、payment 只落单）；ROADMAP S3 勾选与 §3.9 六行；新增 `test-evidence.md`（S2 放号幂等 + S3 并发/降级对照） |
+| v0.5.17 | 2026-10-23 | **体检轮**：`s3` 复跑 `PASS=11`（限购合并后断言数 14→11，脚本头部与章节号修正）；`s8` 修限购兼容与清理策略后复跑 `PASS=29 FAIL=0 SKIP=0`；`s9` 复跑 `PASS=23 FAIL=0`；`test-evidence` §11.3 记录 s8 的三处修法 |
 | v0.5.16 | 2026-10-23 | **回滚 `jsencrypt` 动态 import**：mp-weixin 把 `import()` 编成 `require().then()` → 登录报 `"/common/vendor.js" is not a function`；回到静态 import 并在 `encrypt.ts` 注释禁止该写法。`request.ts` 的「空 body 带状态码」保留；`test-evidence.md` §15.6 修正 |
 | v0.5.15 | 2026-10-23 | **遗留清零**：`jsencrypt` 按需加载（H5 独立 chunk、小程序不进启动链路，三种导出形态兜底）；`request.ts` 空 body 带 HTTP 状态码 + toast；`test-evidence.md` §15.6 记录处理与验证 |
 | v0.5.14 | 2026-10-23 | **小程序真机扫码验收通过**：微信 8.0.66 / 基础库 3.17.5 端到端跑通「详情二维码 → 扫一扫 → E1 → SIGNED」；S11 分诊台三项全部可用；`test-evidence.md` §15.5 记录验收步骤与二次扫的 `SIGN_WINDOW_CLOSED` |

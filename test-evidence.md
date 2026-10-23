@@ -203,7 +203,7 @@ APPT_TOKEN='<token>' bash script/test/s5_remain_consistency.sh
 
 | 脚本 | 结果 |
 |---|---|
-| `s3_b1_concurrency.sh` | `PASS=14 FAIL=0 SKIP=0`（50 并发仍 1 成交、幂等、限购三条、窗口外） |
+| `s3_b1_concurrency.sh` | `PASS=11 FAIL=0 SKIP=0`（2026-10-23 复跑，限购改口径后：50 并发仍 1 成交、幂等、同日跨科室 `LIMIT_PATIENT_DAY`、不同就诊日各 1 单成功、窗口外） |
 | `s4_payment.sh` | `PASS=21 FAIL=0 SKIP=0`（回调 3 次仅 1 次入账、关单回补可再约、关单后回调自动退款、并发关单 1 次生效、验签） |
 
 > 2026-10-20 二次复跑：`releaseToPool` 占位键释放修复生效（重启后）再跑 `s4_payment.sh`，
@@ -397,6 +397,10 @@ APPT_TOKEN='<appt_patient>' TRIAGE_TOKEN='<appt_triage>' bash script/test/s8_pat
 
 - E3 本期**不按在岗院区过滤**（`sys_user` 无院区字段，契约 §11 #7 未决）；`appt_registration` 无 `visit_date` 单列索引，当前 2000 行量级可接受，正式环境建议补 `(visit_date, campus_id)`（DDL 不在本期）。
 - 消息读侧不做「一键全部已读」（契约未定义），推送/微信订阅消息本期不做。
+- **2026-10-23 复跑（限购改口径后）**：`s8_patient_aux.sh` 由 `FAIL=1` 修至 `PASS=29 FAIL=0 SKIP=0`。原因与修法：
+  ① **第二笔下单**原假设「可同日再下一单」，新限购（同一就诊人同一就诊日 1 单）会拦 → 改为选**其它就诊日**的号源；
+  ② **收尾退号**在深夜跑必失败（退号截止是就诊前一日 23:00，`REFUND_DEADLINE_PASSED`）→ 残留单会在下一轮触发 `LIMIT_PATIENT_DAY` → 改为「前置 + 收尾」都用 SQL 作废并回池号源，不依赖 B5；
+  ③ `window_slot` 的排除条件由「同科室同日」改为「**同就诊人同就诊日**」，与后端口径一致。
 
 ---
 
@@ -600,7 +604,7 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 | 项 | 问题 | 修法 |
 |---|---|---|
 | `manifest.json → mp-weixin.setting` | 生成的 `project.config.json` 只有 `es6:true`，缺 `enhance`（增强编译），产物里的 `??` / `?.`（`pages/` 内 47 处）不会被降级 | 补 `es6 / enhance / postcss / minified`，已验证产物 `project.config.json` 含 `enhance:true` |
-| `dev:mp-wsl` 的 baseApi | 默认 `http://localhost:8082`（真机指手机自己）；曾一度被改成本机 IP 时误删成 `http://:8082` → 微信报 `invalid url "http://:8082/..."` | 默认改为本机网卡 `http://192.168.0.108:8082`，可用 `APPT_MP_BASE_API` 覆盖 |
+| `dev:mp-wsl` 的 baseApi | 默认 `http://localhost:8082`（真机指手机自己）；曾一度被改成本机 IP 时误删成 `http://:8082` → 微信报 `invalid url "http://:8082/..."` | 默认改为本机网卡**转发口** `http://192.168.0.108:18082`（8082 被 QQ 占用，见 §15.4），可用 `APPT_MP_BASE_API` 覆盖 |
 
 ### 15.4 WSL2 下让手机访问后端（Win10 无 `networkingMode=mirrored`）
 
