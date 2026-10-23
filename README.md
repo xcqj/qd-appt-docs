@@ -17,7 +17,7 @@
 |---|---|---|---|
 | `backend` | `qd-appt-backend` | 后端（RuoYi-Vue-Plus + 模块 `appt`） | 已建（框架基线 + 工程基线 + S1 表结构） |
 | `admin` | `qd-appt-admin` | 管理后台（plus-ui / Vue3） | 已建（框架基线 + dev 代理 8082） |
-| `app` | `qd-appt-app` | 移动端（uni-app，患者 + 分诊台双角色） | **已建（E5 脚手架，2026-10-22）**：登录/双角色切换/匿名院区可用；页面归 **S10**（患者主链路）/**S11**（辅助页 + 分诊台），就诊人依赖 S9 |
+| `app` | `qd-appt-app` | 移动端（uni-app，患者 + 分诊台双角色） | **功能完成（S10/S11 于 2026-10-22/23 收口）**：患者 9 屏 + 辅助 4 屏 + 分诊台 3 项（签到/当日/停诊），小程序真机扫码已验收；视觉打磨归 **S12/S12.5** |
 | `docs` | `qd-appt-docs` | 本目录：项目级文档 | 已建 |
 
 一次会话围绕**一个切片或一个明确目标**：切片必须由用户显式开启（规则见 `AGENTS.md` §1）；跨仓改动按仓**分别提交**。构建只在各仓库目录内执行，**不在父目录跑 `mvn` / `npm`**（父目录不受 .gitignore 保护，游离产物长期残留）。
@@ -32,8 +32,8 @@
 | `AGENTS.md` | **跨仓协作协议**：切片闸门 / 开场卡与阅读回执 / 最小必读集 / 收尾与判定标准 / 环境事实 | 已建 |
 | `api-contract.md` | API 契约：四层边界、端点条目、16 个业务错误码、权限标识、状态边界矩阵（实现视角，v0.1 已定稿；P0 端点全部落地，仅剩 B8–B10 / C4 / E4 / F8–F30 待补） | 已建 |
 | `database-design.md`（本仓）+ `appt_schema.sql`（backend 仓 `script/sql/`） | 库表设计（字段级唯一权威）+ 建表 SQL（20 表已在 `appt` 库验证） | 已建 v0.1（S1） |
-| `ROADMAP.md` | **切片排期单一权威**：切片顺序 / 验收口径 / 进度与时间戳 / 待决项（PRD §13.1-13.2 只管范围与边界，不管排期） | 已建 v0.5.1（S1–S8 完成，S9–S11 已排期） |
-| `test-evidence.md` | **测试证据**：各切片实测数字与复现命令（交付验收材料，随切片追加） | 已建（§1–§11，S2–S8） |
+| `ROADMAP.md` | **切片排期单一权威**：切片顺序 / 验收口径 / 进度与时间戳 / 待决项（PRD §13.1-13.2 只管范围与边界，不管排期） | 已建 **v0.6.0**（S1–S11 功能阶段完成；S12–S16 交付阶段已排期） |
+| `test-evidence.md` | **测试证据**：各切片实测数字与复现命令（交付验收材料，随切片追加） | 已建（§1–**§15**，S2–S11 + 小程序真机） |
 | `script/doc_audit.py` | **文档一致性门禁**：过期表述 / §2–§3 状态传播 / 证据章节编号 / P1 清单 / 字典审计（收尾必跑，见 AGENTS §5） | 已建 |
 | `architecture.md` | 模块图、请求链路、部署拓扑、拆分预案 | 待建 |
 
@@ -133,7 +133,7 @@ pnpm dev:h5        # H5：http://localhost:8084（/dev-api 代理到 8082）
 pnpm dev:mp-wsl    # 小程序：产物输出到 D:\programming\project\appt-app，开发者工具导入该目录
 ```
 
-- `dev:mp-wsl` 供「源码在 WSL、开发者工具在 Windows」使用；小程序端不走 vite 代理，脚本已把 `VITE_APP_BASE_API` 覆盖为 `http://localhost:8082`，路径与地址可分别用 `APPT_MP_OUT_DIR` / `APPT_MP_BASE_API` 覆盖；
+- `dev:mp-wsl` 供「源码在 WSL、开发者工具在 Windows」使用；小程序端不走 vite 代理，脚本把 `VITE_APP_BASE_API` 默认为 **`http://<本机网卡>:18082`**（经 `netsh portproxy` 转到 WSL 的 8082；**别用 8082，会被 Windows 上的 QQ 占用**，详见 `app/README` §2.1 与 `test-evidence` §15.4），路径与地址可分别用 `APPT_MP_OUT_DIR` / `APPT_MP_BASE_API` 覆盖；
 - 开发者工具导入后勾「不校验合法域名、web-view、TLS」。
 
 ### 4. 演示入口
@@ -149,11 +149,13 @@ pnpm dev:mp-wsl    # 小程序：产物输出到 D:\programming\project\appt-app
 
 | 脚本 | 覆盖 |
 |---|---|
-| `s3_b1_concurrency.sh` | 集成测试① 并发争抢 / 幂等 / 三条限购 |
+| `s3_b1_concurrency.sh` | 集成测试① 并发争抢 / 幂等 / **限购「同一就诊人同一就诊日 1 单」**（2026-10-23 改口径） |
 | `s4_payment.sh` | 集成测试②③ 关单回补 / 回调幂等 / 钱到了号没了 |
 | `s5_read_bench.sh`、`s5_remain_consistency.sh` | 单屏 SQL 次数与分位 / 集成测试⑤ 缓存一致性 |
 | `s6a_state_machine.sh` | 集成测试⑥ 退号 / 签到 / 爽约兜底 / 置完成 |
 | `s6b_suspend_blacklist.sh` | 停诊两段式与幂等 / 黑名单拦截 |
 | `s7_reconcile.sh` | 七查构造与修复 / 二次跑归零 / 耗时 |
+| `s8_patient_aux.sh` | 收藏 D1–D3 / 消息 D4–D6 / E3 签到列表 / 三类站内信 |
+| `s9_patient_crud.sh` | 就诊人 B6–B10（含 10 人上限、越权 404、设默认幂等） |
 
 留档数字见 `test-evidence.md`（§3–§10）。
