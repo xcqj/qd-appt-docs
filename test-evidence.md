@@ -605,8 +605,10 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 ### 15.4 WSL2 下让手机访问后端（Win10 无 `networkingMode=mirrored`）
 
 - 手机 → Windows 网卡 → WSL 需要 `netsh interface portproxy`，且 `connectaddress` **必须填 WSL 的 IPv4**（如 `172.31.124.129`）。填 `127.0.0.1` 会失败：Windows 的 `localhost` 优先走 `::1`，WSL 的 localhost 转发落在 IPv6 回环，IPv4 回环上没有监听（实测 `127.0.0.1:8082` 不通、`localhost:8082` 通）
+- **转发口不要用 8082**：实测 Windows 上 `QQ.exe`（PID 31612）占着 `0.0.0.0:8082`，`netsh portproxy` 因端口被占**静默绑定失败**（`show v4tov4` 仍显示条目），访问 `192.168.0.108:8082` 实际打到 QQ 的 HTTP 服务 → **空 body 的 404**；前端表现为 `request.ts` 的「响应为空」，且后端日志里**查不到该请求**（这条反证很好用）。改用 `listenport=18082` 后 `curl.exe` 立刻返回 `{"code":200,...}`
+- `netsh add` 在端口被占 / 条目已存在时**不报错**，每次都要 `show v4tov4` 复核
 - WSL 重启后 IPv4 会变，`portproxy` 需重加；长期方案是 Win11 的 `networkingMode=mirrored`
-- 验证顺序：手机浏览器先打开 `http://<局域网IP>:8082/appt/public/campus/list` 看到 JSON，再开小程序
+- 验证顺序：手机浏览器先打开 `http://<局域网IP>:18082/appt/public/campus/list` 看到 JSON，再开小程序
 
 ### 15.5 遗留
 
