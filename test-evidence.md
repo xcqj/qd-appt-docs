@@ -610,7 +610,20 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 - WSL 重启后 IPv4 会变，`portproxy` 需重加；长期方案是 Win11 的 `networkingMode=mirrored`
 - 验证顺序：手机浏览器先打开 `http://<局域网IP>:18082/appt/public/campus/list` 看到 JSON，再开小程序
 
-### 15.5 遗留
+### 15.5 真机扫码签到验收（2026-10-23，通过）
 
-- `utils/encrypt.ts` 顶层 import `jsencrypt`（依赖 `window/navigator`）。真机未复现（该库内部有 `typeof navigator` 守卫），但只在登录时用，后续应改 `await import('jsencrypt')` 动态加载，避免进启动链路
-- 扫码签到本机已验证到「登录 + 页面可渲染」，**扫码动作本身待真机复测**（需真实 AppID + 后端可达；`manifest` 里的 AppID 属个人配置，不入库）
+环境：微信 **8.0.66** / 基础库 **3.17.5**，后端经 `portproxy` 18082（→ WSL `172.31.124.129:8082`）访问。
+
+| 步骤 | 操作 | 结果 |
+|---|---|---|
+| 1 | 造一条今天可签的单：`R20261023000099`（`BOOKED`，就诊 23:59，骨科/演示医生04/东院区，归属 `admin`） | `B3` 详情 `code=200`、`visitCode=R20261023000099` |
+| 2 | 电脑 H5（8084）`admin` 登录 → 我的预约 → 该单详情 → 展示二维码 | 二维码正常渲染（内容 = `visitCode`） |
+| 3 | 手机分诊端（`appt_triage`）→ 签到 → 扫一扫 → 扫屏幕上的码 | **签到成功**，结果卡显示就诊人/医生/时间/签到方式=扫码 |
+| 4 | 同一张码再扫一次 | `SIGN_WINDOW_CLOSED`（预期，状态机正确） |
+
+结论：**小程序端「扫一扫 → E1 → 签到」端到端可用**，与 H5 手动补签（E2）共用同一状态机。
+
+### 15.6 遗留
+
+- `utils/encrypt.ts` 顶层 import `jsencrypt`（依赖 `window/navigator`）。真机未复现（库内部有 `typeof navigator` 守卫），但只在登录时用，后续应改 `await import('jsencrypt')` 动态加载，避免进启动链路
+- `request.ts` 在「statusCode 非 2xx 且 body 为空」时只报「响应为空」，丢了 HTTP 状态码（本次排查被误导过一轮），建议改为「服务不可达（404）· 请检查接口地址」
