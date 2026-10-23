@@ -126,13 +126,13 @@ test-evidence 章节编号、契约 P1 清单；外加复用 `backend/script/enu
 4. 能列出**验收命令 + 预期现象 + 不做清单**；
 5. 能说明与现有实现的**冲突或不确定点**（没有则写「无」）。
 
-## 7. 环境事实（最后核实 2026-10-19）
+## 7. 环境事实（最后核实 2026-10-23）
 
 | 项 | 值 |
 |---|---|
 | 后端 / admin dev | `8082` / `8083`（admin 经 `/dev-api` 代理 8082） |
 | MySQL | `blog-mysql:3306`，业务库 `appt`（含 SnailJob 的 `sj_*` 表） |
-| Redis / MinIO | `6379` / `9000`（bucket `appt`，公有只读） |
+| Redis / MinIO | Redis 走本仓 `backend/deploy` 的 `qd-appt-redis`，宿主机 **`6380`**（db `1`，AOF 已开）；`9000` 为 MinIO（bucket `appt`，公有只读）。`6379` 上常驻的是其它项目的 `blog-redis`，**不要再借** |
 | SnailJob | 服务端在仓库 `ruoyi-extend/ruoyi-snailjob-server`；控制台 `http://127.0.0.1:8800/snail-job`（`admin/admin`）；客户端端口 `17888` |
 | 构建纪律 | 只在各仓目录内执行；父目录禁跑 `mvn`/`pnpm` |
 | 移动端小程序（2026-10-23） | 源码在 WSL、开发者工具在 Windows：`app` 仓 `pnpm dev:mp-wsl` 把产物输出到 `D:\programming\project\appt-app`（`/mnt/d/...`）再导入；**不要**用 `\\wsl.localhost\` UNC 路径（监听失效、编译慢）。小程序不走 `/dev-api` 代理，脚本已把 `VITE_APP_BASE_API` 覆盖为 `http://localhost:8082` |

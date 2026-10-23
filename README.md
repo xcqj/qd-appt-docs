@@ -70,7 +70,7 @@
 | 组件 | 用途 | 本地约定 |
 |---|---|---|
 | MySQL 8 | 业务库 `appt` | 容器 `blog-mysql`，账号 `root/root` |
-| Redis 7 | 占位键 / 余量缓存 / Sa-Token / 幂等键 | 容器 `blog-redis`，db `1`，密码 `ruoyi123` |
+| Redis 7 | 占位键 / 余量缓存 / Sa-Token / 幂等键 | 容器 `qd-appt-redis`（`backend/deploy`，宿主机 `6380`），db `1`，密码 `ruoyi123` |
 | MinIO | 图片对象存储（院区封面 / 医生头像 `ossId`） | `127.0.0.1:9000` |
 | SnailJob 2.0.2 | 定时任务调度台（放号 / 关单 / 爽约 / 置完成 / 对账） | 控制台 `8800`，组 `ruoyi_group` |
 

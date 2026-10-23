@@ -28,7 +28,7 @@ flowchart TB
     end
     subgraph infra["数据与中间件"]
         MYSQL[("MySQL 8 · 库 appt<br/>blog-mysql 容器 · 20 张 appt_ 表 0 行<br/>（已核实 DDL：DDL↔information_schema 零差异）")]
-        REDIS[("Redis database 1<br/>blog-redis 容器 · 命名空间 appt:*")]
+        REDIS[("Redis database 1<br/>qd-appt-redis 容器（宿主机 6380）· 命名空间 appt:*")]
         SJ[("snail-job-server + sj_* 库<br/>计划未导入（Q12，ROADMAP 待决项 1 落地步骤）")]
     end
     APP -->|HTTPS| CTRL
