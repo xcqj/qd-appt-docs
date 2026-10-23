@@ -97,8 +97,8 @@ def check_stale():
 
 
 # ---------------------------------------------------------------- 2. 状态传播
-SLICE_ROW = re.compile(r"^\|\s*\*\*(S\d+)\*\*\s*\|")
-SECTION = re.compile(r"^###\s+(S\d+)\b")
+SLICE_ROW = re.compile(r"^\|\s*\*\*(S\d+(?:\.\d+)?)\*\*\s*\|")
+SECTION = re.compile(r"^###\s+(S\d+(?:\.\d+)?)\b")
 
 
 def parse_roadmap():

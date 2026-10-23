@@ -636,3 +636,58 @@ APPT_TOKEN='<appt_patient>' bash script/test/s9_patient_crud.sh
 | `request.ts` 空 body 吞掉状态码 | 200 → 「响应为空，请稍后重试」；非 200 → 「服务不可达（404），请检查接口地址或网络」，非 silent 时 toast | `type-check` / `lint` / `build:h5` / `build:mp-weixin` 全绿 |
 
 > `jsencrypt` 的 CJS 产物 `typeof module.exports === 'function'`（没有 `.JSEncrypt`、没有 `.default`），原先的 `import { JSEncrypt }` 依赖的是它的 ESM 构建；改成动态 import 后必须按打包器的 interop 形态兜底，否则小程序端会拿到一个函数却取不到构造器。
+
+---
+
+## 16. S12 品牌与首屏（2026-10-24）
+
+> 切片性质：视觉与资产生成，**无后端改动、无端点变更**。验证口径为「资产可复现 + 双端一致 + 门禁全绿 + 人工验收」。
+
+### 16.1 品牌资产（脚本可复现）
+
+| 项 | 结果 |
+|---|---|
+| 生成命令 | `cd app && pnpm brand:gen`（`scripts/gen-brand-assets.mjs`，devDependency `@resvg/resvg-js@2.6.2`） |
+| 母标三档 | `full`（牌 + 十字 7.2 + 三点）/ `compact`（去三点、十字加粗 8.4）/ `crossOnly`（仅十字，紧致画布 + 8% 安全区）；同一套几何常量派生，`fill-rule="evenodd"` 单路径 |
+| 主色 PNG | 16 / 32（纯十字）、48 / 64 / 128 / 256 / 512（完整档）+ `logo-compact-48`，另反白 4 档与横版 1 张 |
+| `favicon.ico` | PNG-in-ICO 手写拼装（6 字节头 + 3×16 字节目录 + 载荷），内嵌 16 / 32（纯十字）与 48（完整档） |
+| 封面 | `cover-144.png`（浅灰底 + 母标）/ `cover-520x280.png`（135° 渐变 + 反白横版 + 「号源」字标，中文取系统字体微软雅黑 600） |
+| 跨仓写出 | app 产物 + `admin/src/assets/logo/{logo,logo-white,logo-compact,logo-compact-white}.png` + `admin/public/favicon.ico`；`../admin` 缺失时只写 app 并告警 |
+
+**本轮修掉的母标缺陷**：`logo-preview/final/A3c-母标.svg` 的三点写成独立 `<circle fill="currentColor">`，与牌同色 → 实际渲染完全不可见；改为同一 `evenodd` 路径的 3 段圆形子形状后「十字牌 · 点阵」才成立（DESIGN §12.1 已记录）。
+
+### 16.2 tabBar 与分诊底栏图标（双端一致）
+
+| 端 | 结果 |
+|---|---|
+| 患者端 | `pages.json` 四项补 `iconPath` / `selectedIconPath`；`build:mp-weixin` 产物 `app.json` 与源一致；`dist/build/mp-weixin/static/tabbar/` 共 14 张 PNG |
+| 分诊台 | 自绘底栏（`TriageTabbar.vue`）由 3 个圆点改为同源线性图标 `triage-{sign,list,suspend}`，选中 / 未选中双色 |
+| 规格 | 81×81 画布、24 网格、`stroke 2` → 6.75px、圆头圆角、未选中 `#8A94A6` / 选中 `#1F7A8C`（DESIGN §12.5） |
+
+### 16.3 三屏抛光（Stitch 参考 → 差异表 → 落地）
+
+Stitch 项目 `appt-s12` 三屏为 **DESKTOP 画布**（1280×1024 / 2560×2048 / 2560×3248），尺寸不可用，只取版式；逐屏结论写在 `app/DESIGN.md` §9.1 / §9.10 / §9.11 的「Stitch 出图校准（2026-10-24）」。落地时修正三处：
+
+1. **状态与退款块矛盾**：出图「已预约」同时显示退款信息 → 实现只在 `CANCELED_ACTIVE / CANCELED_PASSIVE` 渲染退款块；
+2. **证件号并进「证件类型」行** → 拆为「就诊人 / 证件类型 / 证件号」三行，仍只上脱敏串（红线 15）；
+3. **我的页三组同屏** → 角色组只在 `isTriage` 渲染；未登录时账户组与退出登录整块不渲染；退出登录独立成卡 + 二次确认。
+
+副产修复：Wot 2.x 按钮底色取 `--wot-primary-6` 色阶而非 `--wot-color-theme`，未覆盖时落框架蓝 → `appt.scss` 补 `--wot-primary-1..10` 与 `--wot-danger-*`，全站 primary 按钮统一 `#1F7A8C`。
+
+### 16.4 门禁与人工验收
+
+```
+app   : pnpm type-check / pnpm lint / pnpm build:h5 / pnpm build:mp-weixin    → 全绿
+admin : pnpm exec vue-tsc --noEmit / pnpm lint / vite build --outDir dist-s12  → 全绿（dist 未动）
+grep  : grep -ri ruoyi admin/src → 仅 @/utils/ruoyi 与 RuoYiAjaxResult（框架内部依赖）
+```
+
+人工验收（2026-10-24，用户确认三处通过）：H5 首页品牌区母标与通栏渐变、底部图标 tab、我的页分组与退出确认、详情页信息行分层；分诊台三页底栏图标与按钮主色；后台登录页 / 侧栏 / 顶栏标识、运营看板四卡与科室排行、favicon 与 `<title>`。
+
+### 16.5 边界声明
+
+- **后端零改动**：看板复用 `GET /appt/admin/dashboard` 与 `GET /appt/admin/suspend/list?status=PENDING`（取 `PageResult.total`），未新增接口；
+- **未做（归 S12.5）**：后台全局主题变量（`--el-color-primary` 仍为框架默认）、表格密度与空态、8 个业务状态标签配色、表单与弹窗规范、404 / 网络异常页、移动端剩余 7 屏；
+- 后台蓝调 `rgba(53,109,255,…)` 仍有 24 处（`_page-shell.scss`、login / register 背景光斑、RightToolbar、system/profile、workflow 等），同归 S12.5；
+- `app/src/manifest.json` 的 `mp-weixin.appid` 属本地配置，未纳入提交；
+- Stitch 提示词已补移动视口声明（`390x844 mobile viewport`），重出时按新提示词执行。
