@@ -853,3 +853,141 @@ GET /v3/api-docs/4.代码生成     → paths: 12
 - 小程序真机截图仍需手工（Playwright 无法驱动微信开发者工具），只交付清单。
 - 小程序真机截图仍需手工（Playwright 无法驱动微信开发者工具），只交付清单。
 - 门面 README 的本地路径按「四仓平级」书写，实际放置不同需自行调整。
+
+---
+
+## 19. S14 一键演示（2026-10-25）
+
+> 目标：只有 Docker 的机器上「一条命令起全栈」，并按 tag 产出三个可独立 `docker run` 的镜像。本节只记实测数字与复现命令。
+
+### 19.1 环境
+
+| 项 | 值 |
+|---|---|
+| 宿主 | Linux（WSL2），Docker 29.7.2 / Compose v5.5.0（include 需 ≥2.20） |
+| 端口说明 | 验收机同时跑着开发环境（8082/8083/8084/6380 被占用）。`./demo.sh` **无参**运行即自动避让为 **18082/18083/18084 + 16380**（MySQL 3307 / MinIO 9010-9011 本身空闲，保持默认），并把实际端口打印出来；若端口是显式指定的（`.env` 或 shell），脚本不擅自更换，直接报错给两种解法 |
+
+### 19.2 构建与运行耗时
+
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 构建 admin | `cd admin && docker build -t ghcr.io/xcqj/appt-admin:latest .` | **29s**（依赖层命中缓存） |
+| 构建 H5 | `cd app && docker build -t ghcr.io/xcqj/appt-h5:latest .` | **2m32s**（首次 pnpm 依赖 2m00s + `build:h5` 8.5s） |
+| 构建 api | `cd backend && docker build -t ghcr.io/xcqj/appt-api:latest .` | **1m23s**（Maven 全量构建，含依赖下载） |
+| 构建 snailjob | `cd backend && docker build -f Dockerfile.snailjob -t ghcr.io/xcqj/appt-snailjob:latest .` | **55s**（同 reactor，依赖已缓存） |
+| 一键起全栈（首次） | `cd showcase && ./demo.sh` | **1m44s**，七步全绿 |
+| 一键起全栈（复跑，无参） | `./demo.sh`（端口自动避让） | **1m24s**，七步全绿 |
+| 一键起全栈（热态复跑） | `./demo.sh` | **58s**（镜像/数据/依赖已就绪，`--full` 幂等） |
+
+### 19.3 镜像体积
+
+| 镜像 | 体积 | 构成 |
+|---|---|---|
+| `ghcr.io/xcqj/appt-api` | **793 MB** | `eclipse-temurin:21-jre-jammy`（407 MB）+ 205 MB fat jar + fontconfig / DejaVu / curl |
+| `ghcr.io/xcqj/appt-admin` | **109 MB** | `nginx:1.31-alpine` + `dist` |
+| `ghcr.io/xcqj/appt-h5` | **95.1 MB** | 同上（H5 产物在 `dist/build/h5`） |
+| `ghcr.io/xcqj/appt-snailjob` | **638 MB** | `eclipse-temurin:21-jre-jammy` + `ruoyi-snailjob-server` jar（控制台 8800 / gRPC 17888） |
+
+### 19.4 健康检查结果
+
+| 端点 | 检查 | 结果 |
+|---|---|---|
+| api | `GET /appt/public/campus/list` | 200，返回 3 个院区 |
+| api | `GET /auth/code`（图形验证码） | 200，返回 `uuid` + `img`（base64 PNG，约 3.6 KB） |
+| api 容器 | compose healthcheck（`curl` 打匿名接口） | `healthy` |
+| admin | `GET /` 与 `GET /prod-api/appt/public/campus/list` | 200 / 200（nginx 运行时反代） |
+| h5 | `GET /` 与 `GET /dev-api/appt/public/campus/list` | 200 / 200 |
+| SnailJob 控制台 | `GET /snail-job/`（宿主 18800） | 200，控制台登录 `admin/admin` 可用 |
+| admin 反代 | `GET http://<admin>/snail-job/` | 200（iframe 直连 compose 内 snailjob:8800） |
+| 依赖 | `docker ps` | MySQL / Redis / MinIO / SnailJob 均 `healthy` |
+| 建库自检 | `init-db.sh --full` 末尾 SQL | 排班 **500** / 号源 **9000** / 挂号单 **2000** / 支付单 **2000** / 账号 **5** |
+
+### 19.5 独立 `docker run` 与参数外置
+
+```bash
+docker run -d --network qd-appt-demo_default -p 18092:8082 \
+  -e APPT_DB_URL='jdbc:mysql://mysql:3306/appt?useSSL=false&allowPublicKeyRetrieval=true' \
+  -e APPT_REDIS_HOST=redis ghcr.io/xcqj/appt-api:latest
+```
+
+- 该容器**只用环境变量**连库与 Redis，第 7 次探活即绪（约 14s）；
+- 账号验证分两种口径（镜像默认「验证码开 + 接口加密开」，下面两种都不改仓库配置）：
+
+| 口径 | 方法 | 结果 |
+|---|---|---|
+| 独立 `docker run` 连通性 | 临时 `CAPTCHA_ENABLE=false` + `API_DECRYPT_ENABLED=false` | `admin` 200 / `appt_triage` 200，均有 `access_token` |
+| **真实链路**（compose 实例） | 取 `/auth/code` 的 `uuid` → 从 Redis `global:captcha_codes:<uuid>` 读答案 → 按前端算法加密（`encrypt-key` = RSA(base64(aesKey))，body = AES-256-ECB+Base64）提交 | `admin` 200（token 444）/ `appt_triage` 200（token 355） |
+
+- **地址确由运行时注入**：admin 容器 `APPT_API_UPSTREAM=http://127.0.0.1:1` → `/prod-api/...` 返回 **502**；改为 compose 默认的 `http://api:8082` → **200**。
+
+### 19.6 复现（默认端口）
+
+```bash
+cd qd-appt/showcase
+./demo.sh            # 首次拉/构建三镜像；之后复跑约 1 分钟；端口被占用会自动换并打印
+./demo.sh down       # 停止，保留数据
+./demo.sh reset      # 二次确认后删数据卷（bind mount 目录会提示手工清理）
+```
+
+端口想固定下来时（例如截图脚本要指向稳定地址），在 `showcase/deploy/.env` 写 `APPT_API_PORT=18082` 等键即可；
+一旦显式写了，脚本就不再自动更换。
+
+### 19.7 边界与已知问题
+
+- 实测机端口被开发环境占用，故用备用端口验证；脚本默认 8082/8083/8084，全部可在 `showcase/deploy/.env` 覆盖。
+- `ghcr` 推送无法在本地替代远端打 tag：三仓 `image.yml` 已就绪（tag 推 `v*` + `latest` + `sha-*`，手动触发默认只 build），本轮只验证 `docker build` 与 `docker run`。
+- **验证码保持开启**：UI 登录仍需人工输入算术题；自动化验证见 §19.5（真实链路那行从 Redis 取答案，不改配置）。
+- **musl/Alpine 基底踩坑（2026-10-25 修复）**：首版用 `bellsoft/liberica-openjre-alpine`，镜像内 fontconfig 与 DejaVu 齐全、`fc-match sans` 正常，但 JVM 仍抛
+  `java.lang.RuntimeException: Fontconfig head is null, check your fonts or fonts configuration` → `GET /auth/code` **500**、登录页验证码裂图（`/appt/public/**` 等不碰 AWT 的接口不受影响，所以只有登录暴露）。
+  改 glibc 基底 `eclipse-temurin:21-jre-jammy` + `fontconfig` + `fonts-dejavu-core`（并在 Dockerfile 注释里写明原因）后恢复；这是放弃 musl 小体积的唯一原因。
+- `docker build` 会遍历 `backend/deploy/data`；容器写出的 root 属主目录不可读时 BuildKit 报 `permission denied` → `demo.sh` 用一次性 alpine 容器 `chmod -R o+rX` 兜底（`ensure_build_context_readable`）。
+- 首次构建 api / H5 需联网下载 Maven 与 npm 依赖；完全离线只能使用已推送的镜像。
+- **SnailJob 服务端已随 demo 发布**（S14 追加，见 §19.9）：`ghcr.io/xcqj/appt-snailjob` + compose 服务，客户端默认 `APPT_SNAILJOB_ENABLED=true`、连 `snailjob:17888`、namespace `dev`；只想跑三端时可置 `APPT_SNAILJOB_ENABLED=false` 并停掉该服务（定时任务仍可在后台「任务日志 → 手动执行」触发）。
+- 小程序包不在镜像内：需真实 AppID 与微信开发者工具，归本地手验。
+
+### 19.8 验收中发现并修掉的六处缺陷（2026-10-25）
+
+| # | 现象 | 根因 | 修复 | 验证 |
+|---|---|---|---|---|
+| 1 | 登录页验证码裂图；`GET /auth/code` 500（`错误编号 xxx`） | musl（Alpine）JRE 的 fontconfig 不可用：库与 DejaVu 齐全、`fc-match` 正常，JVM 仍抛 `Fontconfig head is null`（详见 §19.7） | 运行时基底改 glibc `eclipse-temurin:21-jre-jammy` + `fontconfig` + `fonts-dejavu-core`，headless 显式开启 | `/prod-api/auth/code` 200（base64 PNG）；真实验证码 + RSA/AES 登录两账号 200 |
+| 2 | 镜像后台侧栏只有二级（基础数据/排班管理…），点「基础数据」空白页 | `appt_s1_menus.sql` 只建到二级；**三级页面菜单与按钮是代码生成器在开发库里点出来的，没有任何脚本**，`--full` 后整棵子树缺失 | 新增 `appt_s14_menu_pages.sql`（从开发库固化 82 行：19 C + 63 F，按 id 区间先删后插，幂等）+ `appt_s2_menu_generate.sql`（补「生成排班」按钮），插入点在 `appt_s1_menus` 之后、`appt_s6a_seed` 之前 | 删库重跑 `--full` 后，与开发库逐 `parent_id` 对比 **diff 为空**（46 组一致）；Playwright 展开「挂号业务 → 基础数据」可见院区管理 / 收费标准 / 时段模板 / 医务人员 / 科室树 / 门诊类型 |
+| 3 | `http://<api>/` 与登录通知出现上游框架名 | `IndexController` 用 `spring.application.name` 拼提示；`AuthController` 欢迎语硬编码 | 两处改为项目口径（「号源演示后端已启动…」「欢迎登录号源预约挂号管理后台」），不动逻辑 | `curl /` 返回新文案；Playwright 登录后通知文本为「凌晨好，欢迎登录号源预约挂号管理后台」 |
+| 4 | 登录页输入框异常高（.el-form-item 152px；dev 46px） | **生产构建的 CSS 顺序**：Element Plus `.el-input .el-input__icon { height: inherit }`（0,2,0）排在 `SvgIcon` 组件样式之后，把 `.svg-icon { height: 1em }` 覆盖掉 → `<svg>` 退回替换元素默认 **300×150**，撑高整个输入框。dev 下组件样式后注入所以正常 | `SvgIcon/index.vue` 增加 `.svg-icon.el-input__icon` / `.svg-icon.input-icon`（含 scoped 属性，权重 0,3,0），尺寸不再依赖加载顺序 | 同视口 1440×900 下 `itemH` 由 152 → **46**，`.login-shell` 由 802 → **595**，与 dev 完全一致 |
+| 5 | 侧栏缺「SnailJob 控制台」入口 | `appt_s13_menu_showcase.sql` 隐藏了「系统监控」顶级菜单，其下的「任务调度中心」（menu_id `1761400000000000120`，component `monitor/snailjob/index`）随之不可见 | `appt_s13_menu_showcase.sql` 第 5 段把它移到「运维对账」末尾并保持可见；admin 镜像 nginx 增加 `/snail-job/` 反代（`APPT_SNAILJOB_UPSTREAM`，默认 `http://host.docker.internal:8800`），compose 加 `host-gateway` | `getRouters` 返回 `运维对账 → 任务调度中心 [snailjob]`；`GET /snail-job/` 200 且返回 SnailJob 控制台 HTML（本机 8800 有服务端）；`/snail-job` 302 保留端口跳转 |
+| 6 | 镜像后台侧栏为白色，dev 是深蓝，强刷也不变 | `admin/src/settings.ts` 在 S13 把 `sideTheme` 改为 `theme-light`；**布局设置按 origin 存 localStorage**，8083 里存着更早的 `theme-dark`，而 18083 里存着上一次访问留下的 `theme-light` —— 两边都在用缓存值，代码默认值根本没生效 | ① 默认改回 `theme-dark`；② `store/modules/settings.ts` 加一次性迁移（`layout-setting-version=2`）：只把旧缓存的 `sideTheme` 对齐到新默认，其余偏好保留，之后用户手切仍会记住 | 全新上下文：背景 **`rgb(17, 24, 39)`**；再模拟「旧缓存 = theme-light 且无版本标记」→ 刷新后 `stored=theme-dark`、`version=2`、背景 `rgb(17,24,39)` |
+
+**关于「镜像样式与原样式不一致」的实测结论**：同一视口（1440×900、DPR 1、locale zh-CN）下分别打开 `localhost:8083`（dev）与 `127.0.0.1:18083`（镜像）的登录页，量得
+`cardWidth=437`、`inputWidth=385`、`inputHeight=44`、`inputFontSize=14px`、`bodyFontSize=16px`、`bodyFontFamily=MiSans,…` **全部一致**；
+后台侧栏默认深蓝（S14 按项目既有观感改回，浅色仍可切换）。截图尺寸差异来自浏览器缩放/截图缩放，非镜像构建差异。
+
+### 19.9 SnailJob 服务端镜像与任务种子（2026-10-25 追加）
+
+> 起因：`application-dev.yml` 里 `snail-job.enabled: true`，定时任务（放号/关单/爽约/置完成/对账）靠开发机上单独起的 SnailJob 2.0.2；镜像只有客户端，换机器就没人调度。本轮把服务端也容器化，并把开发期手工建的任务固化成 seed。
+
+**镜像与端口**
+
+| 项 | 容器内 | 宿主机默认 | 说明 |
+|---|---|---|---|
+| 控制台（Web） | 8800 | **18800** | context-path `/snail-job`，登录 `admin/admin` |
+| 客户端 gRPC | 17888 | **27888** | 避开开发机常驻的 17888 |
+| 构建 | `docker build -f Dockerfile.snailjob -t ghcr.io/xcqj/appt-snailjob:latest backend` | 55s / 638 MB | 与 api 同 reactor，多阶段 |
+
+**任务种子（`appt_s14_snailjob_seed.sql`）**
+
+| 任务 | 执行器 | 触发 | 说明 |
+|---|---|---|---|
+| 每日放号 | `apptReleaseJob` | cron `0 0 8 * * ?` | S2 滚动放号 |
+| apptPaymentCloseJob | `apptPaymentCloseJob` | cron `*/30 * * * * ?` | S4 支付超时关单 + 号源回补 |
+
+- 字段与开发库一致；`next_trigger_at` 在插入时重置为「次日同时刻」，**避免容器一起来就触发一次**改动演示数据；
+- 顺手删掉 `ry_job.sql` 自带的 `demo-job`（本应用没有 `testJobExecutor`，留着只刷日志）；
+- **登录页三个外链图标已隐藏**（官方邮箱 / Gitee / GitHub）：前端打在 `BOOT-INF/lib/snail-job-server-ui-*.jar` 里改不了源码，构建时解出 `admin/` 静态目录、向 `index.html` 注入 `.pt-24px .pt-12px.text-center{display:none}` 并以 `SPRING_WEB_RESOURCES_STATIC_LOCATIONS=file:/app/admin-override/,classpath:admin/` 让补丁目录优先 —— 直连 18800 与后台 iframe 都生效，登录与控制台功能不受影响。
+
+**实测**
+
+- `sj_job` = 2 条；`sj_job_executor` 注册到 **5 个业务执行器**：`apptCompleteJob` / `apptNoShowJob` / `apptPaymentCloseJob` / `apptReleaseJob` / `apptReconcileJob`；
+- 控制台 `GET /snail-job/` 200，登录后首页显示命名空间 Development、组 `ruoyi_group`「总任务数 2」、在线机器 客户端 1 + 服务端 1；
+- admin 的 `/snail-job/` 反代 200，后台「运维对账 → 任务调度中心」iframe 直接可用；
+- **启动顺序有硬要求**：必须 `init-db.sh --full`（建 `sj_*` 表）之后再起 snailjob，否则服务端会持续报 `Table 'appt.sj_group_config' doesn't exist`（本轮实测先起会刷 172 条错误日志，表建好后自愈）。`demo.sh` 已把 SnailJob 放在第 ⑥ 步（建库之后）。
+
+**未覆盖**：在控制台点「执行一次」的端到端触发（需要人工在 UI 里点，或后续补控制台 API 登录 + 触发脚本）；「任务日志 → 手动执行」这条不依赖 SnailJob 的路径在 S2/S4 已验收。

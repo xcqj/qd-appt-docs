@@ -46,7 +46,7 @@
 | **S12** | **品牌与首屏**：logo / favicon / tabBar 图标；后台品牌变量与登录页；**后台首页换预约运营看板**；患者端首页·详情·我的三屏抛光 | 三端有统一标识，首屏不再像脚手架 | docs / app / admin | uni-app + plus-ui | — | **已完成 2026-10-24** |
 | **S12.5** | **全站视觉统一**：后台主题色/表格/状态标签/空态；移动端剩余 7 屏走查 | 后台与移动端「像一套产品」 | docs / app / admin | uni-app + plus-ui | — | **已完成 2026-10-24** |
 | **S13** | **门面与物料**：根 README / `DEMO.md` 剧本 / 截图与 GIF / ADR 索引 / SpringDoc 入口 | 30 分钟能跑起来，5 分钟能讲完 | docs / app / admin / backend / showcase | — | — | **已完成 2026-10-24** |
-| **S14** | **一键演示**：`demo.sh` + 镜像构建 workflow + 环境变量模板 | 空机器一条命令起全栈 | docs / backend / app / admin | — | — | **未开始** |
+| **S14** | **一键演示**：`demo.sh` + 镜像构建 workflow（api / snailjob / admin / h5 四枚）+ 环境变量模板 | 空机器一条命令起全栈 | docs / backend / app / admin / showcase | docker compose | — | **已完成 2026-10-25** |
 | **S15** | **医院感细节**：流程引导条 / 院区信息页 / 须知与规则页 / 免责与急诊提示 | 不像 demo，像一家医院的系统 | docs / app | uni-app | — | **未开始** |
 | **S16** | **线上部署**：域名 + HTTPS + 反代 + 备份 + 健康检查 +（可选）监控 | 公网可访问、可扫码 | docs / backend / app / admin | — | — | **未开始（阻塞：服务器未就绪）** |
 
@@ -236,14 +236,19 @@
 - [x] **接口文档入口**：README 给 OpenAPI JSON 与四分组；实测本仓未引 Swagger UI，**`/doc.html` 不存在**（如实写进 README 与 DEMO）
 - **验收**：10 张截图 + 1 个 GIF 全部由脚本产出 ✅；DEMO 剧本可照做 ✅；新人 30 分钟跑通 — 待按 README 实测（`assets/` 共 6.8 MB，未入库 node_modules）
 
-### S14 一键演示
+### S14 一键演示（已完成 2026-10-25）
 
 > 不依赖服务器：先把"一条命令起全栈"和"出镜像"做掉，S16 只加部署步骤。
 
-- [ ] **`demo.sh`**：`compose up` → `init-db.sh` → `seed` → 起后端/后台/H5，每步带健康检查与失败提示
-- [ ] **镜像构建 workflow**：打 tag 输出 `appt-api` / `appt-admin` / `appt-h5` 三个镜像并推 ghcr
-- [ ] **环境变量模板**：`.env.example`（后端/后台/移动端各一份）+ 读取说明
-- **验收**：空机器（有 Docker）一条命令起全栈；镜像可 `docker run` 独立启动
+- [x] **`demo.sh`**（showcase 仓）：预检 Docker / compose ≥2.20 / 仓库布局 / 端口 → 拉取或本地构建四镜像 → 起依赖 → `init-db.sh --full` 建库导数据 → 建 MinIO bucket → 起 SnailJob → 起三端 → 逐端探活；任一步失败打印「失败步骤 + 修复命令 + 看日志命令」；**默认端口被占用时按 `+10000` 自动避让并打印实际地址**（显式指定的端口不擅自更换，直接报错给解法）；附 `down` / `reset` / `logs` 三个子命令
+- [x] **镜像构建 workflow**：后端两份 + 前端两份（api / snailjob / admin / h5），tag `v*` 构建并推 `ghcr.io/xcqj/appt-*`（内置 `GITHUB_TOKEN` + `packages: write`），`workflow_dispatch` 默认只 build（`push` 开关才推）；本地四镜像 `docker build` 均通过
+- [x] **环境变量模板**：`backend/.env.example`（数据源 / Redis / 端口 / SnailJob 开关）、`admin/.env.example`（构建期 `VITE_*` + 运行期 `APPT_API_UPSTREAM`）、`app/.env.example`（H5 前缀 / 小程序产物目录 / 运行期上游），逐项标注默认值与生效位置
+- [x] **干净机菜单树补齐**：新增 `appt_s14_menu_pages.sql`（19 个页面菜单 + 63 个按钮权限，来自代码生成器「生成菜单」、此前只存在于开发库）+ `appt_s2_menu_generate.sql`，纳入 `--full` 链路；修掉「侧栏只有二级、点进去空白页」
+- [x] **去上游框架名**：`GET /` 改为「号源演示后端已启动，请通过前端地址访问。」；登录欢迎通知改为「…欢迎登录号源预约挂号管理后台」
+- [x] **镜像 UI 验收修复**：① `SvgIcon` 提权（生产 CSS 顺序让 Element Plus 的 `height: inherit` 生效，svg 退回 300×150，把登录输入框撑到 152px）；② 恢复「运维对账 → 任务调度中心」入口（`appt_s13_menu_showcase.sql` 第 5 段）+ admin nginx `/snail-job/` 反代；③ 侧栏默认由 S13 的浅色改回深蓝（与项目既有观感一致，浅色仍可切换），并加一次性迁移对齐旧 localStorage
+- [x] **SnailJob 服务端随 demo 发布**：新增 `Dockerfile.snailjob` + `image-snailjob.yml` → `ghcr.io/xcqj/appt-snailjob`；compose 起 `snailjob` 服务（宿主 18800 控制台 / 27888 gRPC），`init-db.sh --full` 追加 `ry_job.sql` + `appt_s14_snailjob_seed.sql`（把开发期手工建的「每日放号」「apptPaymentCloseJob」固化，`next_trigger_at` 重置到次日避免启动即跑，并清掉无执行器的框架 `demo-job`）；后台客户端默认 `APPT_SNAILJOB_ENABLED=true` 连 `snailjob:17888`，namespace `dev`
+- **验收**：空机器（有 Docker）一条命令起全栈 — **2026-10-25 实测** `./demo.sh` 首次 **1m44s** / 复跑 **58s**，八步全绿（明细见 `test-evidence.md` §19）；四镜像可 `docker run` 独立启动：admin 把 `APPT_API_UPSTREAM` 指向错误地址返回 **502**、指向正确地址返回 **200**，证明后端地址来自运行时环境变量而非镜像内写死；**验证码接口 `/auth/code` 200 + 两套账号按真实「验证码 + RSA/AES 加密」链路登录 200**；**SnailJob 控制台（18800）登录可见 2 个任务、5 个业务执行器在线**
+- **边界**：不含 HTTPS / 域名 / nginx 统一反代 / 服务器部署（归 S16）；SnailJob 任务只用 seed 里的 2 条（爽约 / 置完成 / 对账任务仍靠后台「任务日志 → 手动执行」，需要时在控制台补建）；小程序包不在镜像内（需真实 AppID 与微信开发者工具）；`ghcr` 推送需在远端打 tag 后由 workflow 执行，本地只验证 `docker build` 与 `docker run`
 
 ### S15 医院感细节
 
@@ -284,6 +289,7 @@
 | `Idempotency-Key`（仅 B1） | S3 | 同 key 双击只产生一笔待支付 | ✅ 2026-10-20 实测（第二次 `data.duplicate=true`，DB 仍 1 单） |
 | 限购三条 + 账号行 `SELECT ... FOR UPDATE` | S3 | 同账号并发 3 单仅 1 笔成功 | ✅ 2026-10-20 实测（三条各命中：DEPT_DAY / TIME_CONFLICT / HOLD_MAX） |
 | SnailJob + Redisson `tryLock` 防叠加 | S2 / S4 / S6a | 双实例同时触发，任务只执行一次 | S2 放号、S4 关单已落地 2026-10-20（`tryLock(0,-1)` 拿不到即记 SKIPPED）；S6a 爽约扫描沿用 |
+| 一条命令起全栈 + 四镜像可独立运行 | S14 | `showcase/demo.sh` 全流程实跑；四镜像各自 `docker run` 探活 | ✅ 2026-10-25 实测（首次 1m44s / 复跑 58s；api 793MB / snailjob 638MB / admin 109MB / h5 95.1MB；admin 上游改错 502、改对 200；真实验证码登录两账号 200；SnailJob 控制台 2 任务 + 5 执行器在线） |
 
 ---
 
@@ -372,6 +378,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-24 | **S12 品牌与首屏完成**：A3c 母标脚本化（`pnpm brand:gen` 重出 30+ 产物：三档 SVG/PNG、反白、横版、favicon、封面）、患者端 tabBar 8 图标 + 分诊底栏 6 图标、后台品牌位（标题/母标/登录页/favicon/loader）与运营看板首页、患者端三屏抛光。副产修两处既有缺陷——① 母标三点与牌同色不可见（改 evenodd 负形子形状）② Wot 按钮主色取 `--wot-primary-6` 色阶而非 `--wot-color-theme`，未覆盖时落框架蓝（补主色阶与危险色） | app `9c1a1ea`、admin `7c47190`、docs 本提交 |
 | 2026-10-24 | **S12.5 全站视觉统一完成**：后台主色三层收口（SCSS 变量 / settings 默认值 / Element 全阶桥接）+ 20 文件框架蓝替换、状态标签组件化（6 组状态 → `el-tag` 语义色）、表格密度与业务化空态、登录页青白两栏改版、404 与网络异常兜底页（移动端单页两模式 + 后台同口径）；四屏 Stitch 差异表结论回填 DESIGN §9.12–§9.14 与 `admin/AGENTS.md` §13 | app `4042127`、admin `c630354`、backend `cfcefad`（枚举审计兼容 `type` 字段）、docs 本提交 |
 | 2026-10-24 | **S13 门面与物料完成**：新增第 5 仓 `qd-appt-showcase`（README + 10 张脚本截图 + Playwright 基建，免 root 补浏览器依赖库与中文字体）；`docs/DEMO.md` 五分钟剧本 + 小程序真机清单；`docs/adr/` 六篇 ADR 与索引；后台清残留（注册页页脚、第三方登录、示例菜单、演示账号昵称）与侧栏改浅色；SpringDoc 四分组 + `application-screenshot.yml`（只关验证码、关 snail-job）；修首页冷启动误跳兜底页。15 秒 GIF 亦已由 `node gif.mjs` 产出（14s / 5MB） | app `43036c1`、admin `30d46f4`、backend `5ae5c55`、showcase `604a07b`、docs 本提交 |
+| 2026-10-25 | **S14 一键演示完成**：showcase 新增 `demo.sh` + demo compose（`include` 复用 `backend/deploy` 依赖，容器名与数据卷独立，可与开发机并存）；`init-db.sh` 加 `--full` 干净机全序导入（补 `ry_vue.sql` / `s0_cleanup` / `s13_menu_showcase` / `e5_client_access` / `oss_config`）并覆盖 OSS 地址；三仓各加 Dockerfile（后端多阶段 + `application-docker.yml` 全环境变量化；前端 nginx 模板运行时注入上游）+ `.env.example` + `image.yml`（tag 推 ghcr，手动默认只 build）。实测 `./demo.sh` 首次 1m44s / 复跑 58s，两套账号按「真实验证码 + RSA/AES 加密」登录 200；镜像 api 793MB / snailjob 638MB / admin 109MB / h5 95.1MB。**踩坑**：Alpine(musl) JRE 的 fontconfig 在本项目不可用（库与字体齐全仍报 `Fontconfig head is null`）→ `/auth/code` 500、验证码裂图；改 glibc 基底（`eclipse-temurin:21-jre-jammy` + fontconfig + DejaVu）修复。**追加**：SnailJob 服务端容器化（`Dockerfile.snailjob` + `appt_s14_snailjob_seed.sql` 固化手工建的任务 + compose 服务，宿主 18800/27888），demo 八步含 SnailJob | showcase + backend + admin + app + docs 各一提交 |
 
 ---
 
@@ -474,3 +481,4 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.6.1 | 2026-10-24 | S12 品牌与首屏：品牌资产脚本化（`gen-brand-assets.mjs` + `brand:gen` + `@resvg/resvg-js`）、母标三点负形修正、患者端 tabBar 与分诊底栏图标化、Wot 主色阶覆盖、后台品牌位与运营看板首页、DESIGN §12 尺寸映射与 §9.11「我的」、患者端三屏抛光 |
 | v0.6.2 | 2026-10-24 | S12.5 全站视觉统一：后台主色/语义色/圆角/表格密度收口、`ApptStatusTag` 状态标签组件、登录页两栏改版、404 与网络异常兜底页、`admin/AGENTS.md` §13 后台视觉基线、DESIGN §9.12–§9.14 |
 | v0.6.3 | 2026-10-24 | S13 门面与物料：第 5 仓 showcase（README / 10 张脚本截图 / 14 秒 GIF / Playwright 基建）、DEMO 五分钟剧本、ADR 六篇、后台残留清理与浅色侧栏、SpringDoc 四分组与截图 profile、菜单与演示账号昵称去上游化 |
+| v0.7.0 | 2026-10-25 | S14 一键演示：`showcase/demo.sh`（八步 + 失败修复提示 + down/reset/logs）、demo compose（include 依赖、独立容器名与数据卷、SnailJob 服务）、`init-db.sh --full`（补框架表 / SnailJob 表 / 菜单树 / 收尾脚本、覆盖 OSS 地址）、后端 `application-docker.yml` 与多阶段 Dockerfile、admin/H5 nginx 运行时反代镜像、四枚镜像的 `image*.yml`、四份 `.env.example`；`docker run` 独立启动、真实验证码登录与 SnailJob 控制台实测通过 |
