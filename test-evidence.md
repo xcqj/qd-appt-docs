@@ -761,3 +761,77 @@ docs  : python3 script/doc_audit.py → 五项全过
 - 后台 404 需部署侧把未命中路径 rewrite 到应用入口才完整生效（归 S16）。
 - **未登录体验补正（2026-10-24，app `4c50e67`）**：原先点任一 tab 会被守卫 `reLaunch` 到登录页，底栏消失且页面栈被清空（登录完只能回首页）。现改为：预约 / 消息 / 我的三页未登录也放行并在页内渲染未登录态（tabBar 全程可见），点「去登录」`navigateTo` 叠层、登录成功 `navigateBack` 回来源 tab；其余受保护页同样改用 `navigateTo` 不再 `reLaunch`。**第二处修正（同日晚，app `9e7e554`）**：首版仍会被 401 弹走——①「我的预约」未登录时仍调用 B2 做默认落点探测 → 401；② 请求层 `handleUnauthorized()` 是 `reLaunch` 且延迟到达的401 会在切 tab 后再弹一次（所以「点预约」和「切首页」都会跳登录页）。现改为：未登录不探测、401 走 `navigateTo` 叠登录页（已在登录页不重复跳）。**第三处修正（app `5b87c60`）**：未登录态下任何 401 一律不再跳转（「本来就没 token」不是「登录过期」，只清登录态、由页面渲染未登录态）；退出登录改为回首页保留底栏，而不是落到登录页。**第四处修正（app `68a04a2`）**：实测「未登录 → 消息 → 点首页」仍跳登录页且 Network 无任何 401，定位为守卫 `pathOf()` 只 `split('?')`、tabBar 传入的 url 可能缺前导斜杠 → 白名单判不中；现归一化路径 + tab 页一律放行 + dev 下打印拦截原因。**第五处（app `0d64569`）**：dev 日志显示被拦路径是 `/` —— H5 tabBar 点首页时 uni 传的是根路径，白名单只有 `/pages/index/index`；`pathOf()` 现将 `/` 折算为首页。口径见 DESIGN §8.3。
 - `app/src/manifest.json`（本地 AppID）与 `docs/appt.code-workspace` 按约定未提交。
+
+---
+
+## 18. S13 门面与物料（2026-10-24，部分完成）
+
+> 目标：陌生人 30 分钟跑通、5 分钟讲明白。本节只记**可复现证据**，不复制 README 正文。
+
+### 18.1 截图（脚本产出，禁止手工）
+
+| 项 | 结果 |
+|---|---|
+| 脚本 | `qd-appt-showcase/tools/screenshots`（Playwright ^1.56，`node run.mjs --shots`） |
+| 产物 | 10 张 PNG：患者端 5（首页 / 选院区 / 科室 / 我的预约 / 消息）、分诊 2（签到 / 当日）、后台 3（运营看板 / 挂号单 / 停诊登记） |
+| 体积 | 合计 1.2 MB，单张 11–95 KB（阈值 ≤300 KB/张） |
+| 视口 | H5 `390×844 @2x`、后台 `1440×900 @1x`；`locale=zh-CN`、`tz=Asia/Shanghai` |
+| 等待 | `waitForSelector` / `getByText(...).waitFor()`；仅 `waitForTimeout(260)` 做过渡收尾（有注释） |
+| 可重复 | 同一命令连续两次结果一致（类名无关，文案/结构选择器） |
+
+**环境解法（免 root，均未改动系统）**
+
+- `chromium` 缺 `libnspr4 / libnss3 / libasound2` → `apt-get download` + `dpkg -x` 到 `.libs/`，
+  启动前挂 `LD_LIBRARY_PATH`（`ldd` 缺失库归零后启动成功）；
+- 中文渲染成方块 → `fonts-wqy-zenhei` 同样解包到 `.libs/fonts`，`FONTCONFIG_FILE` 指过去；
+- 浏览器二进制复用 `~/.cache/ms-playwright/chromium-*`，安装依赖时 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`，未重复下载。
+
+### 18.2 过程中修掉的两个真实缺陷
+
+1. **首页冷启动误跳兜底页**（app `43036c1`）：`loadCampuses()` 只要首帧请求失败就 `goFallback('offline')`，
+   而冷启动时请求可能先于登录态恢复/路由就绪 → 「同一 URL 有时首页、有时网络异常页」。
+   现改为仅 `navigator.onLine === false` 才跳兜底，其余失败走页内错误态 + 重试。
+2. **后台整页刷新丢登录态，导致截图脚本无法按 URL 导航**：改为点侧栏菜单（DOM click），
+   并发现 Element 折叠子菜单在 Playwright 里被判定不可见——DOM click 两层都绕开。
+   这条对将来任何后台自动化都适用，已写进 `tools/screenshots/README.md`。
+
+### 18.3 后台「去模板化」清理（本轮）
+
+| 项 | 处理 |
+|---|---|
+| 注册页页脚 | 「Copyright © 2018-… 疯狂的狮子Li All Rights Reserved.」→「号源演示系统 · 数据全部虚构」 |
+| 登录页第三方登录 | 整块移除（分割线 + 5 个圆形按钮 + `doSocialLogin` + `authRouterUrl`/`HttpStatus` import + 样式）；后端无任何 social 客户端 |
+| 侧栏顶级菜单 | `appt_s13_menu_showcase.sql` 隐藏「系统监控 / 系统工具 / PLUS官网」（含 AI 残留叶子），保留「系统管理」；「挂号业务」置顶；只改 `visible`/`order_num`，附回滚 |
+| 演示账号昵称 | `sys_user.nick_name` 由框架种子带入「疯狂的狮子Li」，会显示在患者端首页「<昵称> · 我的预约 ›」与后台顶栏 → 改为「演示管理员 / 测试账号A / 测试账号B」 |
+| 侧栏配色 | `sideTheme: 'theme-light'`，去掉框架默认深蓝侧栏，与「深潭青 + 白卡」统一（admin `30d46f4`） |
+| 示例页 | `views/demo`、`views/ai`、`views/workflow` 保留文件但不挂菜单（`admin/AGENTS.md` §13 已记） |
+
+### 18.4 SpringDoc 实测
+
+```
+GET /v3/api-docs/1.门诊预约业务 → paths: 110
+GET /v3/api-docs/2.系统与权限   → paths: 109
+GET /v3/api-docs/3.通用能力     → paths: 10
+GET /v3/api-docs/4.代码生成     → paths: 12
+```
+
+- 分组与 `contact` 已改项目口径，框架示例模块分组（`org.dromara.demo`）不再暴露；
+- **本仓未引 `springdoc-openapi-starter-webmvc-ui`，`/doc.html` 与 `/swagger-ui/*` 不存在**
+  （返回业务码 404，HTTP 200），README 与 DEMO 如实写「用 OpenAPI JSON 导入 Apifox/Insomnia」；
+- 截图实例 `18082` 以 `dev,screenshot` 启动：`captchaEnabled:false`（主实例 8082 仍为 true），
+  并关掉 `snail-job`（其端口公式 `2${server.port}` 在 18082 下溢出为 218082，启动即失败）。
+
+### 18.5 文档物料
+
+- `docs/DEMO.md`：5 分钟剧本（患者 7 步 / 分诊 4 步 / 管理端 5 步），每步含「看到什么」与「卡点怎么办」；
+  附小程序真机截图清单（8 屏、750×1334、命名 `mp-<页面>-<状态>.png`）。
+- `docs/adr/`：六篇 + 索引，每篇固定「背景 / 决策 / 后果 / 证据」，证据指向 `test-evidence` 章节或契约条款。
+- `showcase/README.md`：门面，含四张内嵌截图、架构图、启动、账号、ADR 索引、已知边界。
+
+### 18.6 未完成与边界
+
+- **15 秒 GIF 未产出**：`recordVideo` 能力已就绪，但主流程录制受「同一就诊人同一就诊日 1 单」约束——
+  必须先实现「跑前取消今日 `WAIT_PAY` 单 → 下单 → 支付 → 退号释放」的闭环 flows，才能稳定重跑。
+  当前只有单页静帧，`run.mjs --all` 暂等同 `--shots`。
+- 小程序真机截图仍需手工（Playwright 无法驱动微信开发者工具），只交付清单。
+- 门面 README 的本地路径按「四仓平级」书写，实际放置不同需自行调整。
