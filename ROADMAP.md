@@ -45,7 +45,7 @@
 | **S11** | 患者端辅助页 + 分诊台：我的就诊人/我的医生/消息/预约详情（就诊码）/扫码签到/手动补签/当日签到列表 | 双角色页面全齐，接口全部有来源 | docs / app（+backend 两处口径收口） | uni-app（患者端 + 分诊台） | — | **已完成 2026-10-23** |
 | **S12** | **品牌与首屏**：logo / favicon / tabBar 图标；后台品牌变量与登录页；**后台首页换预约运营看板**；患者端首页·详情·我的三屏抛光 | 三端有统一标识，首屏不再像脚手架 | docs / app / admin | uni-app + plus-ui | — | **已完成 2026-10-24** |
 | **S12.5** | **全站视觉统一**：后台主题色/表格/状态标签/空态；移动端剩余 7 屏走查 | 后台与移动端「像一套产品」 | docs / app / admin | uni-app + plus-ui | — | **已完成 2026-10-24** |
-| **S13** | **门面与物料**：根 README / `DEMO.md` 剧本 / 截图与 GIF / ADR 索引 / SpringDoc 入口 | 30 分钟能跑起来，5 分钟能讲完 | docs / app / admin / backend / showcase | — | — | **进行中（截图已产出，GIF 待补）** |
+| **S13** | **门面与物料**：根 README / `DEMO.md` 剧本 / 截图与 GIF / ADR 索引 / SpringDoc 入口 | 30 分钟能跑起来，5 分钟能讲完 | docs / app / admin / backend / showcase | — | — | **已完成 2026-10-24** |
 | **S14** | **一键演示**：`demo.sh` + 镜像构建 workflow + 环境变量模板 | 空机器一条命令起全栈 | docs / backend / app / admin | — | — | **未开始** |
 | **S15** | **医院感细节**：流程引导条 / 院区信息页 / 须知与规则页 / 免责与急诊提示 | 不像 demo，像一家医院的系统 | docs / app | uni-app | — | **未开始** |
 | **S16** | **线上部署**：域名 + HTTPS + 反代 + 备份 + 健康检查 +（可选）监控 | 公网可访问、可扫码 | docs / backend / app / admin | — | — | **未开始（阻塞：服务器未就绪）** |
@@ -224,17 +224,17 @@
 - [x] **补 404 与网络异常页**：移动端 `pages/fallback/index.vue` 单页两模式（`notfound` / `offline`），母标十字水印 + 标题 + 说明 + 主按钮 + 文字链；H5 启动校验 hash 路由、首页首屏失败进 offline，**不做全局自动跳转**；后台 404 页去掉卡通云图改同口径（app `4042127` / admin `c630354`）
 - **验收**（2026-10-24）：后台抽查登录页 / 运营看板 / 挂号单 / 停诊登记 / 404 五页 + 移动端兜底两页与六屏走查；`grep -rn "#409EFF\|53, 109, 255" admin/src` 为 0；DESIGN §9.12–§9.14 与 `admin/AGENTS.md` §13 已落地。证据见 `test-evidence.md` §17
 
-### S13 门面与物料（进行中 2026-10-24）
+### S13 门面与物料（已完成 2026-10-24）
 
 > 这一片决定"别人愿不愿意看第二眼"。所有物料必须可复现（脚本产出），不接受手工截图。
 
 - [x] **门面 README**（改为第 5 仓 `qd-appt-showcase`，`showcase/README.md`）：定位 + mermaid 架构图 + 真实截图 + 三端启动 + 账号表 + 已知边界 + 仓库对照表（根目录不建伞仓，避免父仓把四子仓当 gitlink）
 - [x] **`docs/DEMO.md`**：5 分钟剧本（患者下单 → 支付 → 就诊码 → 分诊签到 → 停诊两段式 → 看板与对账），逐步写「点哪里 / 看到什么 / 卡点怎么办」+ 附录小程序真机截图清单（8 屏 + 尺寸与命名规范）
 - [x] **截图脚本**：`showcase/tools/screenshots`（Playwright），已产出 **10 张**单页截图（患者 5 / 分诊 2 / 后台 3），`--shots` 可重复跑；免 root 解决 WSL 缺库与缺中文字体
-- [ ] **15 秒 GIF**：脚本已支持 `recordVideo`，但流程录制（患者下单到支付）尚未实现——受「同一就诊人同一就诊日 1 单」限购约束，需先实现「跑前取消今日待支付单 + 下单支付退号闭环」的 flows 才能稳定重跑
+- [x] **15 秒 GIF**：`node gif.mjs` 产出 `assets/demo.gif`（14 秒 / 168 帧 / 5.0 MB，上限 10 MB）——患者路径「首页 → 院区 → 科室 → 医生 → 排班 → 选时间」，**停在「下一步」前不提交**，绕开限购额度问题；录制用「先无录像登录拿 storageState → 再开录像上下文」，开头白屏按内容比例自动裁掉。转码不用 ffmpeg 一步到位（Playwright 自带 ffmpeg 是无 gif muxer / 无 palettegen 的精简构建），改为抽 PNG 帧 + `gifenc` 量化
 - [x] **ADR 六篇**：`docs/adr/`（限购口径 / 停诊两段式与批号幂等 / `active_flag` 与唯一索引 / `scopeValue` 复合键 / `timePoint` 口径 / 三层防线）+ 索引，结论均挂 test-evidence 章节或契约条款
 - [x] **接口文档入口**：README 给 OpenAPI JSON 与四分组；实测本仓未引 Swagger UI，**`/doc.html` 不存在**（如实写进 README 与 DEMO）
-- **验收**：截图全部由脚本产出 ✅；DEMO 剧本可照做 ✅；新人 30 分钟跑通 — 待你按 README 实测
+- **验收**：10 张截图 + 1 个 GIF 全部由脚本产出 ✅；DEMO 剧本可照做 ✅；新人 30 分钟跑通 — 待按 README 实测（`assets/` 共 6.8 MB，未入库 node_modules）
 
 ### S14 一键演示
 
@@ -371,7 +371,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-20 | **S5 手工验收收口**：A1 封面 `coverImageUrl` 翻译（ossId → URL，直链数据回空串由前端 `\|\|` 兜底）、A3 分页与中文关键字、A4 匿名 200/不存在 404、A5 医生模式定长 7 项、A6 下单 48→47 与关单回 47→48、`remain=0` 午别仍返回、后台余量列与导出（无该列）全部通过；发现并修两处：① 缺必填参数/参数类型不合法由框架 500 收口为 **400**（`ApptExceptionHandler` 加两个 handler 并按 appt 包限定 + 最高优先级）；② `releaseToPool` CAS 未命中时**仍释放本单占位键**（Lua 比对 value），消除「DB 可约 + Redis 仍占用」的孤儿键导致的持续 `SLOT_GONE`；重启后复跑 `s4_payment.sh` 仍 `PASS=21 FAIL=0` | backend + docs 各一提交 |
 | 2026-10-24 | **S12 品牌与首屏完成**：A3c 母标脚本化（`pnpm brand:gen` 重出 30+ 产物：三档 SVG/PNG、反白、横版、favicon、封面）、患者端 tabBar 8 图标 + 分诊底栏 6 图标、后台品牌位（标题/母标/登录页/favicon/loader）与运营看板首页、患者端三屏抛光。副产修两处既有缺陷——① 母标三点与牌同色不可见（改 evenodd 负形子形状）② Wot 按钮主色取 `--wot-primary-6` 色阶而非 `--wot-color-theme`，未覆盖时落框架蓝（补主色阶与危险色） | app `9c1a1ea`、admin `7c47190`、docs 本提交 |
 | 2026-10-24 | **S12.5 全站视觉统一完成**：后台主色三层收口（SCSS 变量 / settings 默认值 / Element 全阶桥接）+ 20 文件框架蓝替换、状态标签组件化（6 组状态 → `el-tag` 语义色）、表格密度与业务化空态、登录页青白两栏改版、404 与网络异常兜底页（移动端单页两模式 + 后台同口径）；四屏 Stitch 差异表结论回填 DESIGN §9.12–§9.14 与 `admin/AGENTS.md` §13 | app `4042127`、admin `c630354`、backend `cfcefad`（枚举审计兼容 `type` 字段）、docs 本提交 |
-| 2026-10-24 | **S13 门面与物料（部分完成）**：新增第 5 仓 `qd-appt-showcase`（README + 10 张脚本截图 + Playwright 基建，免 root 补浏览器依赖库与中文字体）；`docs/DEMO.md` 五分钟剧本 + 小程序真机清单；`docs/adr/` 六篇 ADR 与索引；后台清残留（注册页页脚、第三方登录、示例菜单、演示账号昵称）与侧栏改浅色；SpringDoc 四分组 + `application-screenshot.yml`（只关验证码、关 snail-job）；修首页冷启动误跳兜底页。**未完成：15 秒 GIF**（受限购约束，flows 待写） | app `43036c1`、admin `30d46f4`、backend `5ae5c55`、showcase `604a07b`、docs 本提交 |
+| 2026-10-24 | **S13 门面与物料完成**：新增第 5 仓 `qd-appt-showcase`（README + 10 张脚本截图 + Playwright 基建，免 root 补浏览器依赖库与中文字体）；`docs/DEMO.md` 五分钟剧本 + 小程序真机清单；`docs/adr/` 六篇 ADR 与索引；后台清残留（注册页页脚、第三方登录、示例菜单、演示账号昵称）与侧栏改浅色；SpringDoc 四分组 + `application-screenshot.yml`（只关验证码、关 snail-job）；修首页冷启动误跳兜底页。15 秒 GIF 亦已由 `node gif.mjs` 产出（14s / 5MB） | app `43036c1`、admin `30d46f4`、backend `5ae5c55`、showcase `604a07b`、docs 本提交 |
 
 ---
 
@@ -473,4 +473,4 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.4.3 | 2026-10-19 | 会话上下文机制（§0–§8：最小输入/闸门/开场卡+阅读回执/基线自查/最小必读集/收尾/5 条判定/环境事实）；补 `slot_template.clinic_type` 与 `medical_staff.clinic_type` 一致性校验（存量 0 条不一致）；新增 `BookingProperties`（3 个 S2 开关） |
 | v0.6.1 | 2026-10-24 | S12 品牌与首屏：品牌资产脚本化（`gen-brand-assets.mjs` + `brand:gen` + `@resvg/resvg-js`）、母标三点负形修正、患者端 tabBar 与分诊底栏图标化、Wot 主色阶覆盖、后台品牌位与运营看板首页、DESIGN §12 尺寸映射与 §9.11「我的」、患者端三屏抛光 |
 | v0.6.2 | 2026-10-24 | S12.5 全站视觉统一：后台主色/语义色/圆角/表格密度收口、`ApptStatusTag` 状态标签组件、登录页两栏改版、404 与网络异常兜底页、`admin/AGENTS.md` §13 后台视觉基线、DESIGN §9.12–§9.14 |
-| v0.6.3 | 2026-10-24 | S13 门面与物料：第 5 仓 showcase（README/截图/脚本）、DEMO 五分钟剧本、ADR 六篇、后台残留清理与浅色侧栏、SpringDoc 分组与截图 profile、菜单与演示账号昵称去上游化；GIF 待补 |
+| v0.6.3 | 2026-10-24 | S13 门面与物料：第 5 仓 showcase（README / 10 张脚本截图 / 14 秒 GIF / Playwright 基建）、DEMO 五分钟剧本、ADR 六篇、后台残留清理与浅色侧栏、SpringDoc 四分组与截图 profile、菜单与演示账号昵称去上游化 |
