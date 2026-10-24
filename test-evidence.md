@@ -691,3 +691,72 @@ grep  : grep -ri ruoyi admin/src → 仅 @/utils/ruoyi 与 RuoYiAjaxResult（框
 - 后台蓝调 `rgba(53,109,255,…)` 仍有 24 处（`_page-shell.scss`、login / register 背景光斑、RightToolbar、system/profile、workflow 等），同归 S12.5；
 - `app/src/manifest.json` 的 `mp-weixin.appid` 属本地配置，未纳入提交；
 - Stitch 提示词已补移动视口声明（`390x844 mobile viewport`），重出时按新提示词执行。
+
+---
+
+## 17. S12.5 全站视觉统一（2026-10-24）
+
+> 切片性质：样式层与常量层改动，**后端零改动、无端点变更、无新增依赖**。
+> 四屏 Stitch 出图（`appt-s12-5` = project `1165857668159132014`）先写差异表，再按差异表落地。
+
+### 17.1 四屏差异表落地（§13.2 四类逐项过）
+
+| 屏 | 画布 | 可 1:1 落地 | 判定为「需回调」并已落地 |
+|---|---|---|---|
+| 404（`screens/12da2218…`） | 2560×2048 DESKTOP | 居中结构、淡十字水印、标题 + 一句说明 + 主按钮 + 文字链 | 十字放大到 `96rpx` 且主色 20%（出图 `#D6E4E7` 偏灰绿）；主按钮回 `88rpx` / 圆角 `12rpx` |
+| 网络异常（`screens/87b60835…`） | 390×844 MOBILE | 结构、文案、按钮层级全对 | 十字同上统一；文字链与按钮间距回 `24rpx` |
+| 消息详情（`screens/102252fc…`） | 1280×502 DESKTOP | 白卡「标题 + 时间」基线对齐、类型标签、正文分段、原生导航标题 | 返回入口 plain 小按钮 → **纯文字链**；类型标签维持 `22rpx` + `#EEF2F6` 底；正文加 `white-space: pre-wrap` 保留纯文本换行 |
+| 后台登录页（`screens/7e27602e…`） | 2880×618 DESKTOP | 左平面深潭青面板 + 右白卡表单，控件全部可映射 Element Plus | 第三方 5 个圆钮沿用既有 `svg-icon`；角色卡底 `rgba(255,255,255,.10)`；验证码保留后端 `codeUrl`；版权行改「号源演示系统 · 数据全部虚构」 |
+
+### 17.2 移动端兜底页（新增）
+
+- `pages/fallback/index.vue` 单页两模式：`notfound`（页面不存在 / 返回首页 / 返回上一页）、`offline`（网络不可用 / 重新加载 / 返回首页）；共用母标纯十字档水印（`logo-cross-128.png`，20% 透明度）。
+- 接线两处、**不做全局自动跳转**：① `router/h5-fallback.ts` 在 H5 启动时校验 hash 路由，未注册页面换到 `notfound`（条件编译，小程序为空实现）；② 首页首屏 `listCampus` 失败且无数据时 `goFallback('offline')`。
+- `utils/fallback.ts` 做 1.5s 防抖；兜底页加入 `WHITE_LIST`（未登录也能看，否则弱网会把用户踢去登录页）。
+- 后台 404 同口径重写：母标水印 + 「页面不存在」+ 一句说明 + 返回首页，去掉卡通云图与 `#1482f0`。
+
+### 17.3 后台主题收口（三处同源）
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| 编译期 SCSS | `tokens/_sass-vars.scss` | `$color-primary #1f7a8c` / `success #2e9e6b` / `warning #d98e04` / `danger #d14343` / `info #3b82c4` |
+| 运行前默认值 | `src/settings.ts` | `theme: '#1F7A8C'`（否则首屏闪一下框架蓝） |
+| 运行时 CSS 变量 | `tokens/_theme.scss` | 新增 `--el-color-{success,warning,danger,info}` + `light-3/5/7/8/9` + `dark-2` 共 28 个变量 |
+
+框架蓝收口：`rgba(53,109,255,…)` 与 `rgba(64,158,255,…)` 共 **20 个文件**统一改主色 RGB，`#409EFF` / `#60a5fa` 同步替换；`views/appt/dashboard` 的 ECharts 柱色一并改。
+圆角归一：卡片 `--app-radius-base: 16px`、`--el-border-radius-base: 8px`（输入/按钮）、`--el-border-radius-small: 4px`（标签）。
+验证残留：`grep -rn "#409EFF\|53, 109, 255" admin/src` → **0 命中**。
+
+### 17.4 状态标签（8 态映射统一）
+
+`views/appt/options.ts` 的 `ApptOption` 增 `type`（`primary/success/info/warning/danger`），六组状态补齐：
+
+| 业务 | 映射 |
+|---|---|
+| 挂号 8 态 | `WAIT_PAY` warning · `BOOKED` primary · `SIGNED`/`COMPLETED` success · `CLOSED`/`CANCELED_ACTIVE`/`CANCELED_PASSIVE` info · `NOSHOW` danger |
+| 支付 4 态 | `WAIT_PAY` warning · `PAID` success · `CLOSED`/`REFUNDED` info |
+| 退款 3 态 | `WAIT_REFUND` warning · `REFUNDED` success · `FAILED` danger |
+| 结算 3 态 | `NONE` info · `WAIT_REFUND` warning · `REFUNDED` success |
+| 停诊 2 态 | `PENDING` warning · `HANDLED` success |
+| 回调 4 态 | `PENDING` warning · `SUCCESS` success · `IGNORED` info · `FAILED` danger |
+
+新增 `components/ApptStatusTag.vue`（未知线值兜底 `info`，不猜危险色），替换 registration / payment / refund / suspend / paymentCallback 五个列表页的状态列——原先都是纯文本 `formatter`，与移动端彩色标签是两套观感。
+
+### 17.5 门禁与人工验收
+
+```
+app   : pnpm type-check / pnpm lint / pnpm build:h5 / pnpm build:mp-weixin  → 全绿
+admin : vue-tsc --noEmit 0 错 / oxlint 0 错 / vite build（outDir=/tmp，未动仓库 dist）→ 通过
+grep  : admin/src 内 #409EFF、rgba(53,109,255,…) → 0 命中
+docs  : python3 script/doc_audit.py → 五项全过
+```
+
+人工验收（2026-10-24）：后台登录页青白两栏、运营看板、挂号单状态标签着色、停诊登记空态、404 页；移动端 H5 走 `#/pages/nope` 落兜底页、首页断网落 offline 页、消息详情文字链与类型标签。
+
+### 17.6 边界声明
+
+- **后端零改动**；无新增依赖，后台构建体积基本不变。
+- 表单与弹窗本轮**只落规范**（`admin/AGENTS.md` §13.4）并抽查两页，未逐页重排 20 张表单位置——如后续发现对不齐，按规范单点修。
+- 暗色主题只做了色值替换（`_theme-dark.scss`），未做对比度专项校验；`i18n` / 移动端暗色不在本片范围。
+- 后台 404 需部署侧把未命中路径 rewrite 到应用入口才完整生效（归 S16）。
+- `app/src/manifest.json`（本地 AppID）与 `docs/appt.code-workspace` 按约定未提交。
