@@ -47,7 +47,9 @@
 | **S12.5** | **全站视觉统一**：后台主题色/表格/状态标签/空态；移动端剩余 7 屏走查 | 后台与移动端「像一套产品」 | docs / app / admin | uni-app + plus-ui | — | **已完成 2026-10-24** |
 | **S13** | **门面与物料**：根 README / `DEMO.md` 剧本 / 截图与 GIF / ADR 索引 / SpringDoc 入口 | 30 分钟能跑起来，5 分钟能讲完 | docs / app / admin / backend / showcase | — | — | **已完成 2026-10-24** |
 | **S14** | **一键演示**：`demo.sh` + 镜像构建 workflow（api / snailjob / admin / h5 四枚）+ 环境变量模板 | 空机器一条命令起全栈 | docs / backend / app / admin / showcase | docker compose | — | **已完成 2026-10-25** |
-| **S15** | **医院感细节**：流程引导条 / 院区信息页 / 须知与规则页 / 免责与急诊提示 | 不像 demo，像一家医院的系统 | docs / app | uni-app | — | **未开始** |
+| **S15** | **医院感细节**：流程引导条 / 院区信息页 / 须知与规则页 / 免责与急诊提示 | 不像 demo，像一家医院的系统 | docs / app | uni-app | — | **已完成 2026-10-26** |
+| **S15.1** | **SnailJob 任务补种**：爽约扫描 / 置完成 / 日终对账三条任务固化进 seed | 换机或起 demo 容器即按 cron 自动跑，不再靠手工点 | backend / docs | SnailJob | S14 边界欠账 | **已完成 2026-10-26** |
+| **S15.2** | **已签到入口补口**：我的预约四个 tab 不含 `SIGNED`，已签到的预约在列表里没有入口 | 患者能在列表里找到已签到的预约 | docs / app | uni-app | S15 验收发现 | **未开始** |
 | **S16** | **线上部署**：域名 + HTTPS + 反代 + 备份 + 健康检查 +（可选）监控 | 公网可访问、可扫码 | docs / backend / app / admin | — | — | **未开始（阻塞：服务器未就绪）** |
 
 **阶段划分（2026-10-24 定）**：S1–S11 为「功能阶段」（可演示全链路，已完成）；**S12–S16 为「交付阶段」**（品牌、视觉、门面、一键演示、线上部署）。
@@ -248,17 +250,40 @@
 - [x] **镜像 UI 验收修复**：① `SvgIcon` 提权（生产 CSS 顺序让 Element Plus 的 `height: inherit` 生效，svg 退回 300×150，把登录输入框撑到 152px）；② 恢复「运维对账 → 任务调度中心」入口（`appt_s13_menu_showcase.sql` 第 5 段）+ admin nginx `/snail-job/` 反代；③ 侧栏默认由 S13 的浅色改回深蓝（与项目既有观感一致，浅色仍可切换），并加一次性迁移对齐旧 localStorage
 - [x] **SnailJob 服务端随 demo 发布**：新增 `Dockerfile.snailjob` + `image-snailjob.yml` → `ghcr.io/xcqj/appt-snailjob`；compose 起 `snailjob` 服务（宿主 18800 控制台 / 27888 gRPC），`init-db.sh --full` 追加 `ry_job.sql` + `appt_s14_snailjob_seed.sql`（把开发期手工建的「每日放号」「apptPaymentCloseJob」固化，`next_trigger_at` 重置到次日避免启动即跑，并清掉无执行器的框架 `demo-job`）；后台客户端默认 `APPT_SNAILJOB_ENABLED=true` 连 `snailjob:17888`，namespace `dev`
 - **验收**：空机器（有 Docker）一条命令起全栈 — **2026-10-25 实测** `./demo.sh` 首次 **1m44s** / 复跑 **58s**，八步全绿（明细见 `test-evidence.md` §19）；四镜像可 `docker run` 独立启动：admin 把 `APPT_API_UPSTREAM` 指向错误地址返回 **502**、指向正确地址返回 **200**，证明后端地址来自运行时环境变量而非镜像内写死；**验证码接口 `/auth/code` 200 + 两套账号按真实「验证码 + RSA/AES 加密」链路登录 200**；**SnailJob 控制台（18800）登录可见 2 个任务、5 个业务执行器在线**
-- **边界**：不含 HTTPS / 域名 / nginx 统一反代 / 服务器部署（归 S16）；SnailJob 任务只用 seed 里的 2 条（爽约 / 置完成 / 对账任务仍靠后台「任务日志 → 手动执行」，需要时在控制台补建）；小程序包不在镜像内（需真实 AppID 与微信开发者工具）；`ghcr` 推送需在远端打 tag 后由 workflow 执行，本地只验证 `docker build` 与 `docker run`
+- **边界**：不含 HTTPS / 域名 / nginx 统一反代 / 服务器部署（归 S16）；SnailJob 任务在 S14 只固化了 2 条（放号 / 关单），爽约 / 置完成 / 对账三条由 **S15.1** 补进同一 seed（2026-10-26 已完成）；小程序包不在镜像内（需真实 AppID 与微信开发者工具）；`ghcr` 推送需在远端打 tag 后由 workflow 执行，本地只验证 `docker build` 与 `docker run`
 
 ### S15 医院感细节
 
 > 成本低、观感强。文案一律走 `DESIGN §8` 的官方书面语口径。
 
-- [ ] **就诊流程引导条**：预约 → 支付 → 签到 → 候诊 → 就诊，患者端详情页与首页各一处
-- [ ] **院区信息页**：地址 / 联系电话 / 门诊时间 / 交通（数据虚构，页脚声明）
-- [ ] **须知与规则页**：挂号须知、退号规则、退款到账时效（1–3 个工作日）、爽约规则
-- [ ] **免责与急诊提示**：页脚常驻「演示系统 · 数据虚构 · 不提供医疗服务」；首页/详情加急诊提示
-- **验收**：新增页面四态齐全；全站文案无口语化表达；`doc_audit` 全绿
+- [x] **就诊流程引导条**：预约 → 支付 → 签到 → 候诊 → 就诊，患者端详情页与首页各一处 —— 新增 `components/StepGuide.vue`，节点名唯一出处是 `utils/appt.ts` 的 `REG_STEPS`，状态映射是同文件 `regStepProgress()`（纯函数）；首页为静态五步说明（不发请求、未登录可见），详情页三态（`WAIT_PAY` 支付当前 / `BOOKED` 签到当前 / `SIGNED` 候诊当前 / `COMPLETED` 全部完成），四个终态只给一句终止说明且不点亮任何节点
+- [x] **院区信息页**：地址 / 联系电话 / 门诊时间 / 交通（数据虚构，页脚声明）—— 新增 `pages/campus/info.vue`（A1 四态：骨架 / 正常 / 查无该院区 / 异常重试）+ `utils/campusProfile.ts`（**按院区名称匹配**虚构电话·门诊时间·交通指引，未命中走通用兜底，不编造具体线路）；首页院区卡加「院区信息」次入口（`@click.stop`，卡片主体仍是选院区进科室），「我的」加常驻入口「院区与就诊指南」
+- [x] **须知与规则页**：挂号须知、退号规则、退款到账时效（1–3 个工作日）、爽约规则 —— 新增 `pages/guide/rules.vue` 五组条款（挂号 / 退号 / 退款到账 / 签到与爽约 / 限购与违约），数字逐条对齐 PRD §6.7 / §6.8 / §6.9 / §14.1：支付 15 分钟、退号截止就诊前一日 23:00、签到自就诊日 00:00 起、爽约判定就诊时刻后 30 分钟、半年 6 次限制半年、同时持有 ≤3 单且同人同科室同日 1 单、退款 1–3 个工作日
+- [x] **免责与急诊提示**：页脚常驻「演示系统 · 数据虚构 · 不提供医疗服务」；首页/详情加急诊提示 —— 新增 `components/AppFooter.vue`（首页 / 我的 / 就诊指南 / 院区详情 / 须知与规则五页）与 `components/EmergencyTip.vue`（首页 / 预约详情 / 就诊指南三页）；另新增 `pages/guide/index.vue` 就诊指南（院区信息 + 规则入口 + 急诊提示 + 页脚）
+- [x] **验收发现并修复（文案）**：预约详情「就诊医生」行原样输出了职称线值（`PHYSICIAN`），改为统一走 `titleLabel()` 中文映射——正落在验收口径 ②「不出现英文代号与内部状态名」上；同时确认「已完成的预约仍显示就诊码」**不是缺陷**：契约 §4.3 规定 `visitCode` 在 `BOOKED / SIGNED / COMPLETED` 返回，`DESIGN §9.10` 四态同口径
+- **验收**：新增页面四态齐全；全站文案无口语化表达；`doc_audit` 全绿 —— **2026-10-26 实测**：`pnpm type-check` → `pnpm lint`（`Found 0 warnings and 0 errors`）→ `pnpm build:h5`（`DONE Build complete`）三条按序通过；`python3 script/doc_audit.py` 五项 PASS、0 警告；四入口与八状态核对表见 `test-evidence.md` §20
+
+### S15.1 SnailJob 任务补种（S14 边界欠账）
+
+> **起因（2026-10-26 实测）**：开发库 `sj_job` 只有 3 条（框架 `demo-job` + 每日放号 + 支付关单），**爽约扫描从未注册过** → 301 条 `BOOKED` 里 299 条就诊时刻已过仍显示「已预约」，admin 主账号的列表与详情页照常出现（详情页还会给就诊码）。手工跑一轮后数据自愈，但换机或起 demo 容器会原样复现。
+> **为什么不能用启动自建任务**：SnailJob 客户端的 `@JobExecutor` 只注册**执行器**，任务定义（cron / 组 / 路由）只存在于服务端 `sj_job`；应用启动不会建任务，客户端写服务端库又有多命名空间撞车风险 → 唯一稳妥做法是 seed（与 S14 对「放号 / 关单」的处理一致）。
+
+- [x] **三条任务固化进 `appt_s14_snailjob_seed.sql`**（沿用同一文件管 `sj_job`，`init-db.sh --full` 无需改）：`apptNoShowJob` `0 */5 * * * ?`（id 4）、`apptCompleteJob` `0 30 23 * * ?`（id 5）、`apptReconcileJob` `0 0 3 * * ?`（id 6）；字段形状与既有 2 条一致（`namespace_id='dev'` / `group_name='ruoyi_group'` / `task_type=1` / `trigger_type=3` / `executor_info` = 执行器名）
+- [x] **幂等**：`DELETE ... job_name IN (五个任务名)` 后再插入，可重复执行；`demo-job` 继续清掉（无对应执行器）
+- [x] **`next_trigger_at` 分策略**：爽约扫描设**下一个 5 分钟整点**——它必须持续跑，延到次日会让演示当天的过期单继续堆「已预约」（本次就是被这个坑到的现象）；放号 / 关单 / 置完成 / 对账仍延到**次日**，避免容器一起来就改动演示数据
+- [x] **本机 dev 库同步**：直接补 id 4–6 三行（`biz_id` 与 seed 一致），不重置既有 id 2/3
+- [x] **顺带修 seed 一处口径**：`apptPaymentCloseJob` 首触发原为「次日同一时刻」，全新环境会**整整 24 小时不关单/不回补号源** → 改 `+30s`（与爽约任务同理：巡检类必须尽快起跑）；`ApptJobRunService` 的 javadoc 白名单补上 `apptReconcileJob`（代码第 65 行本就支持，注释漏写）
+- **验收**：`sj_job` 共 5 条（id 2–6）；新任务到点**自动触发**并落 `appt_job_log`；重导 seed 幂等；`doc_audit.py` 五项 0 警告 —— **2026-10-26 实测**：`apptNoShowJob` 于 **01:00:00 自动执行**（批号 `J20261026000125`，`affected=0`，因数据已在此前两轮手工里清空），执行后 `next_trigger_at` 自动推进到 **01:05:00**；同批日志可见完整序列：**00:46:20 `爽约=299 / 号源过期=2000`** → **00:52:06 `号源过期=2000`** → **00:52:30 `1135`** → **00:52:36 `0`** → **01:00:00 自动 `0`**，正好印证「单轮 2000 条上限（`SCAN_BATCH_SIZE=100` × `MAX_ROUNDS=20`）+ 不足一批即收尾」；`apptCompleteJob` / `apptReconcileJob` 的 `next_trigger_at` 落在 **2026-10-27 00:56:29**（次日同一时刻首触发，随后按 cron）；另测两项：**置完成**手动执行 `affected=206`（批号 `J20261026000234`，`SIGNED` 206 → 0、`COMPLETED` 498 → 704）；**对账**「立即对账」批次 `RC20261026000001`、耗时 **14950ms**、七查「发现 507 / 修复 507 / 告警 0 / 跳过 0」（R1 幽灵占号 505 + R3 补退 2，成因见 `test-evidence.md` §21.5）
+- **边界**：只补任务定义，**不改任务代码与 cron 语义**；已签到的「置完成」与 03:00 对账在本轮没有等到触发点，逻辑沿用 S6a/S7 已验收实现；`sj_job` 的 `next_trigger_at` 仍按 S14 口径「次日同一时刻」而非 cron 时刻首触发（既有行为，本片不改）
+
+### S15.2 已签到入口补口（未开始，2026-10-26 登记）
+
+> **来源**：S15 验收时发现——「我的预约」四个 tab（待支付 / 已预约 / 已完成 / 退号·爽约）**不含 `SIGNED`**，已签到的预约在列表里没有任何入口，只能直链或看后端日志。B2 的 `status` 必填、一次只查一个状态（契约 §4.2），不能靠一次查询合并。
+
+- [ ] 方案二选一（**归 S15.2，开工时拍板**）：①「已预约」tab 内加子筛选「已预约 / 已签到」，复用 `CANCELED` tab 已有的子筛选结构；② 直接加第五个 tab（顶部会变挤，`wd-tabs` 需横向滚动）
+- [ ] 选定方案后同步 `DESIGN §9.9` 的 tab 与线值映射表（当前只写了四项）
+- [ ] 验收：admin 名下的 `SIGNED` 单（样本 `RS70000003376`）能在列表里点开
+- **边界**：不改 B2 接口（一次仍只查一个状态）、不动其余 tab 的口径与动作
 
 ### S16 线上部署（阻塞：服务器未就绪）
 
@@ -290,6 +315,7 @@
 | 限购三条 + 账号行 `SELECT ... FOR UPDATE` | S3 | 同账号并发 3 单仅 1 笔成功 | ✅ 2026-10-20 实测（三条各命中：DEPT_DAY / TIME_CONFLICT / HOLD_MAX） |
 | SnailJob + Redisson `tryLock` 防叠加 | S2 / S4 / S6a | 双实例同时触发，任务只执行一次 | S2 放号、S4 关单已落地 2026-10-20（`tryLock(0,-1)` 拿不到即记 SKIPPED）；S6a 爽约扫描沿用 |
 | 一条命令起全栈 + 四镜像可独立运行 | S14 | `showcase/demo.sh` 全流程实跑；四镜像各自 `docker run` 探活 | ✅ 2026-10-25 实测（首次 1m44s / 复跑 58s；api 793MB / snailjob 638MB / admin 109MB / h5 95.1MB；admin 上游改错 502、改对 200；真实验证码登录两账号 200；SnailJob 控制台 2 任务 + 5 执行器在线） |
+| 医院感说明层（流程条 / 院区信息 / 须知规则 / 免责急诊） | S15 | 三条质量门槛按序通过 + `doc_audit` 五项 0 警告 + 四入口与八状态流程条核对 | ✅ 2026-10-26（`type-check` 通过、`lint` 0 warnings 0 errors、`build:h5` DONE；`doc_audit` 5 PASS / 0 WARN；流程条 4 在途 + 4 终态按 `regStepProgress` 逐条核对，页脚只出现在 5 个信息展示型页面，`/appt/public/**` 之外零新增接口） |
 
 ---
 
@@ -379,6 +405,9 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-24 | **S12.5 全站视觉统一完成**：后台主色三层收口（SCSS 变量 / settings 默认值 / Element 全阶桥接）+ 20 文件框架蓝替换、状态标签组件化（6 组状态 → `el-tag` 语义色）、表格密度与业务化空态、登录页青白两栏改版、404 与网络异常兜底页（移动端单页两模式 + 后台同口径）；四屏 Stitch 差异表结论回填 DESIGN §9.12–§9.14 与 `admin/AGENTS.md` §13 | app `4042127`、admin `c630354`、backend `cfcefad`（枚举审计兼容 `type` 字段）、docs 本提交 |
 | 2026-10-24 | **S13 门面与物料完成**：新增第 5 仓 `qd-appt-showcase`（README + 10 张脚本截图 + Playwright 基建，免 root 补浏览器依赖库与中文字体）；`docs/DEMO.md` 五分钟剧本 + 小程序真机清单；`docs/adr/` 六篇 ADR 与索引；后台清残留（注册页页脚、第三方登录、示例菜单、演示账号昵称）与侧栏改浅色；SpringDoc 四分组 + `application-screenshot.yml`（只关验证码、关 snail-job）；修首页冷启动误跳兜底页。15 秒 GIF 亦已由 `node gif.mjs` 产出（14s / 5MB） | app `43036c1`、admin `30d46f4`、backend `5ae5c55`、showcase `604a07b`、docs 本提交 |
 | 2026-10-25 | **S14 一键演示完成**：showcase 新增 `demo.sh` + demo compose（`include` 复用 `backend/deploy` 依赖，容器名与数据卷独立，可与开发机并存）；`init-db.sh` 加 `--full` 干净机全序导入（补 `ry_vue.sql` / `s0_cleanup` / `s13_menu_showcase` / `e5_client_access` / `oss_config`）并覆盖 OSS 地址；三仓各加 Dockerfile（后端多阶段 + `application-docker.yml` 全环境变量化；前端 nginx 模板运行时注入上游）+ `.env.example` + `image.yml`（tag 推 ghcr，手动默认只 build）。实测 `./demo.sh` 首次 1m44s / 复跑 58s，两套账号按「真实验证码 + RSA/AES 加密」登录 200；镜像 api 793MB / snailjob 638MB / admin 109MB / h5 95.1MB。**踩坑**：Alpine(musl) JRE 的 fontconfig 在本项目不可用（库与字体齐全仍报 `Fontconfig head is null`）→ `/auth/code` 500、验证码裂图；改 glibc 基底（`eclipse-temurin:21-jre-jammy` + fontconfig + DejaVu）修复。**追加**：SnailJob 服务端容器化（`Dockerfile.snailjob` + `appt_s14_snailjob_seed.sql` 固化手工建的任务 + compose 服务，宿主 18800/27888），demo 八步含 SnailJob | showcase + backend + admin + app + docs 各一提交 |
+| 2026-10-26 | **S15 医院感细节完成**：患者端补四层说明信息——① `StepGuide` 五节点流程条（首页静态说明 / 详情页三态，四个终态只留终止说明）；② 就诊指南 + 院区详情（A1 四态，电话·门诊时间·交通指引按院区名称匹配虚构常量）；③ 须知与规则五组条款（数字对齐 PRD §6.7/§6.8/§6.9/§14.1）；④ `AppFooter`（5 页）与 `EmergencyTip`（3 页）。三页入匿名白名单（未登录可读），`pages.json` 21 → 24 页；DESIGN 补 §8.3 固定文案与 §9.15–§9.17 blueprint。**零后端接口、零表结构改动** | app + docs 各一提交 |
+| 2026-10-26 | **S15 验收收口 + 登记 S15.2**：验收发现预约详情「就诊医生」行把职称线值（`PHYSICIAN`）直接显示出来 → 统一走 `titleLabel()`；确认「已完成仍显示就诊码」符合契约 §4.3 与 `DESIGN §9.10`，不是缺陷；另发现「我的预约」缺 `SIGNED` 入口，登记为 **S15.2（未开始）** | app + docs 各一提交 |
+| 2026-10-26 | **S15.1 SnailJob 任务补种完成**：`appt_s14_snailjob_seed.sql` 由 2 条扩到 5 条（新增 `apptNoShowJob` / `apptCompleteJob` / `apptReconcileJob`，id 4–6），`next_trigger_at` 按任务分策略（爽约取下个 5 分钟整点，其余延次日）；dev 库同步补 3 行。**数据侧同步收口**：手工跑满爽约扫描（299 条过期 `BOOKED` → `NOSHOW`、5255 条 `AVAILABLE` → `EXPIRED`、补发 299 封 `NOSHOW_RECORD`），并把 admin 名下 6 条测试单改归属到造数虚拟账号 `1761400000000003199`，避免主账号违约计数触线被锁半年。实测 `apptNoShowJob` 于 01:00:00 自动触发并推进到 01:05:00 | backend + docs 各一提交 |
 
 ---
 
@@ -482,3 +511,6 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.6.2 | 2026-10-24 | S12.5 全站视觉统一：后台主色/语义色/圆角/表格密度收口、`ApptStatusTag` 状态标签组件、登录页两栏改版、404 与网络异常兜底页、`admin/AGENTS.md` §13 后台视觉基线、DESIGN §9.12–§9.14 |
 | v0.6.3 | 2026-10-24 | S13 门面与物料：第 5 仓 showcase（README / 10 张脚本截图 / 14 秒 GIF / Playwright 基建）、DEMO 五分钟剧本、ADR 六篇、后台残留清理与浅色侧栏、SpringDoc 四分组与截图 profile、菜单与演示账号昵称去上游化 |
 | v0.7.0 | 2026-10-25 | S14 一键演示：`showcase/demo.sh`（八步 + 失败修复提示 + down/reset/logs）、demo compose（include 依赖、独立容器名与数据卷、SnailJob 服务）、`init-db.sh --full`（补框架表 / SnailJob 表 / 菜单树 / 收尾脚本、覆盖 OSS 地址）、后端 `application-docker.yml` 与多阶段 Dockerfile、admin/H5 nginx 运行时反代镜像、四枚镜像的 `image*.yml`、四份 `.env.example`；`docker run` 独立启动、真实验证码登录与 SnailJob 控制台实测通过 |
+| v0.7.1 | 2026-10-26 | S15 医院感细节：新增 `StepGuide` / `AppFooter` / `EmergencyTip` 三个展示组件与 `utils/campusProfile.ts`、`REG_STEPS` + `regStepProgress`；新增就诊指南 / 须知与规则 / 院区详情三页（`pages.json` 24 页、三页进匿名白名单）；首页加院区信息次入口与静态流程条，详情页加三态流程条，我的加就诊指南入口并统一页脚；DESIGN 补 §8.3 固定文案与 §9.15–§9.17 blueprint。**不改后端接口与表结构** |
+| v0.7.3 | 2026-10-26 | S15 验收收口：修复预约详情「就诊医生」把职称线值（`PHYSICIAN`）直接显示的问题（改走 `titleLabel()`）；确认「已完成仍显示就诊码」属契约 §4.3 与 `DESIGN §9.10` 口径、不是缺陷；登记 **S15.2**（我的预约缺 `SIGNED` 入口，含两个候选方案与验收样本） |
+| v0.7.2 | 2026-10-26 | S15.1 SnailJob 任务补种：`appt_s14_snailjob_seed.sql` 补齐 `apptNoShowJob` / `apptCompleteJob` / `apptReconcileJob`（2 → 5 条），`next_trigger_at` 按任务分策略（爽约取下个 5 分钟整点，其余延次日）；S14 边界那处欠账同步改写；dev 库同步插入 3 行；数据侧把 299 条过期 `BOOKED` 转 `NOSHOW`、5255 条号源转 `EXPIRED`，admin 名下 6 条测试单改归属虚拟账号避免违约触线 |
