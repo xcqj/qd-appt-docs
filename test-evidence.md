@@ -1156,7 +1156,7 @@ sj_job 3 条：demo-job / 每日放号（0 0 8 * * ?）/ apptPaymentCloseJob（*
 - 台账时间失真：`RELEASE` 记录落在**对账时刻**，不是状态流转时刻；
 - 本轮 R1 修复后复查：`TAKEN` 507 → **2**、`EXPIRED` 5255 → **5760**、`AVAILABLE` 保持 **14500**（过期保护生效：已过时刻直接置 `EXPIRED`，不回池）。
 
-**处置**：本片未改 —— 动状态机会碰 `RegistrationStateService` 与号源迁移，属新切片。候选修法：在 `markNoShow` / `markCompleted` 同一事务内调用新增的 `slotStateService.expireTaken(slotId, registrationId)`（`TAKEN → EXPIRED`、余量 0、写台账），让 R1 只剩真正的脏数据。
+**处置（2026-10-26，S15.3 已修）**：按本小节给过的候选修法落地 —— 新增 `SlotStateService.expireTaken()`（`TAKEN → EXPIRED`、余量 0、写台账），`markNoShow` / `markCompleted` 在同事务内调用；实测见 §23。本小节保留作问题溯源。
 
 ---
 
@@ -1224,3 +1224,49 @@ sj_job 3 条：demo-job / 每日放号（0 0 8 * * ?）/ apptPaymentCloseJob（*
 - 列表仍**不提供退号**入口（退号在详情页，受「就诊前一日 23:00」时限与二次确认约束）；
 - 状态色沿用 `DESIGN §2.3`（`SIGNED` = `#2E9E6B`），本片未新增色值、字号或圆角；
 - `DESIGN §9.9` 的「状态 → 动作」段原文与实现长期不符（写「其余只展示状态标签」），本片按实现订正，属文档纠偏而非行为变更。
+
+---
+
+## 23. S15.3 终态号源释放（2026-10-26）
+
+> 起因：§21.5 观察到「爽约 / 置完成不迁号源，一天积出 505 条幽灵占号」。本节记修法、夹具与实测数字。
+
+### 23.1 改动（3 个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `schedule/SlotStateService` | 新增 `expireTaken(slotId, registrationId)`：`TAKEN → EXPIRED`、清 `registration_id`、写 `EXPIRE` 台账、**余量 0**（不发缓存增量） |
+| `registration/RegistrationStateService` | `markNoShow` / `markCompleted` 签名加 `slotId`，**CAS 命中（affected>0）后同一事务**调用 `expireTaken` |
+| `job/ApptNoShowJobService`、`job/ApptCompleteJobService` | 查询多取 `ApptRegistration::getSlotId` 并传入，不额外查库 |
+
+四条状态边互斥：退号走 `releaseToPool`（未到时刻回池 / 已过置过期，余量 +1 或 0）、停诊走 `suspendTaken`（`TAKEN → SUSPENDED`），都**没有**改成调用 `expireTaken`，因此不会重复写台账。
+
+`expireTaken` 的 CAS 带 `registration_id`：重复调用、或号源已被对账 R1 回收时影响 0 行、不写台账。
+
+### 23.2 夹具（回滚式，跑完任务自动回到原状态）
+
+| 夹具 | 退回成 | 涉及行 |
+|---|---|---|
+| F1 爽约路径 | `BOOKED` + `active_flag=1`，slot `TAKEN` | 单 `R20261023000016`（id `2113351434572869633`）/ slot `1761500000000218114` |
+| F2 置完成路径 | `SIGNED` + `active_flag=1`，slot `TAKEN` | 单 `RS70000003876`（id `1761500000000303876`）/ slot `1761500000000221606` |
+
+两条都是造数虚拟账号 `1761400000000003199` 的历史单，`visit_date` / `time_point` 均在 10-24（已过），因此会被两条任务直接命中。
+
+### 23.3 实测
+
+| 步骤 | 结果 |
+|---|---|
+| 跑「爽约+号源过期扫描」 | `affected=1` → F1 单 `NOSHOW`、slot `EXPIRED`、`registration_id` 清空 |
+| 跑「置完成」 | `affected=1` → F2 单 `COMPLETED`、slot `EXPIRED`、`registration_id` 清空 |
+| 台账 | 两条 `EXPIRE`：`TAKEN → EXPIRED`，`create_time` = **02:47:13 / 02:47:59**（状态流转时刻，不再是 03:00 对账时刻） |
+| 「立即对账」 | 批次 `RC20261026000002`：**907ms、七查全 0（发现/修复/告警/跳过 均 0）、新批次结果 0 行**；旧批次 `RC20261026000001` 的 507 行保留作历史 |
+| 幽灵占号复核 | **0**（基线同为 0 —— 本轮证明「不再产生新的」，505 那批已由上一轮对账修掉） |
+| 编译 | `mvn -pl ruoyi-modules/appt -am clean compile` → 退出码 0 |
+
+### 23.4 边界
+
+- 只处理 `NOSHOW` / `COMPLETED` 两条终态；退号、停诊、关单的释放路径一行未改；
+- 不改对账口径（R1 仍保留兜底，真脏数据照样能修）；
+- 余量语义不变：`TAKEN → EXPIRED` 恒 0，`AVAILABLE → EXPIRED` 才是 −1；
+- 不改 A7 / B2 的查询条件与展示；
+- 夹具是**一次性数据操作**（回滚到流转前状态），不进 seed；正常环境里这条边由真实流转触发。
