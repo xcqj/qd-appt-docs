@@ -50,6 +50,7 @@
 | **S15** | **医院感细节**：流程引导条 / 院区信息页 / 须知与规则页 / 免责与急诊提示 | 不像 demo，像一家医院的系统 | docs / app | uni-app | — | **已完成 2026-10-26** |
 | **S15.1** | **SnailJob 任务补种**：爽约扫描 / 置完成 / 日终对账三条任务固化进 seed | 换机或起 demo 容器即按 cron 自动跑，不再靠手工点 | backend / docs | SnailJob | S14 边界欠账 | **已完成 2026-10-26** |
 | **S15.2** | **已签到入口补口**：我的预约四个 tab 不含 `SIGNED`，已签到的预约在列表里没有入口 | 患者能在列表里找到已签到的预约 | docs / app | uni-app | S15 验收发现 | **未开始** |
+| **S15.3** | **终态号源释放**：`NOSHOW` / `COMPLETED` 不迁 Slot，对账 R1 每天报几百条幽灵占号 | 终态流转即释放号源，R1 只剩真脏数据 | backend / docs | — | S15.1 实测发现 | **未开始** |
 | **S16** | **线上部署**：域名 + HTTPS + 反代 + 备份 + 健康检查 +（可选）监控 | 公网可访问、可扫码 | docs / backend / app / admin | — | — | **未开始（阻塞：服务器未就绪）** |
 
 **阶段划分（2026-10-24 定）**：S1–S11 为「功能阶段」（可演示全链路，已完成）；**S12–S16 为「交付阶段」**（品牌、视觉、门面、一键演示、线上部署）。
@@ -285,6 +286,15 @@
 - [ ] 验收：admin 名下的 `SIGNED` 单（样本 `RS70000003376`）能在列表里点开
 - **边界**：不改 B2 接口（一次仍只查一个状态）、不动其余 tab 的口径与动作
 
+### S15.3 终态号源释放（未开始，2026-10-26 登记）
+
+> **来源**：S15.1 核对对账结果时发现——批次 `RC20261026000001` 报 R1 幽灵占号 **505** 条，正好等于本轮「299 转爽约 + 206 转完成」。**不是脏数据，是终态没释放号源**：`RegistrationStateService` 的 `markNoShow` / `markCompleted` 只改挂号单与 `active_flag`，Slot 仍停在 `TAKEN`；而 `TAKEN → EXPIRED` 的唯一调用点是 `SlotStateService.reclaimGhost()`（对账 R1），所以只能等 03:00 对账来扫。
+
+- [ ] 终态流转即释放号源：新增 `SlotStateService.expireTaken(slotId, registrationId)`（`TAKEN → EXPIRED`、余量 **0**、写 `EXPIRE` 台账），在 `markNoShow` / `markCompleted` 的同一事务内调用，红线 9 口径不变
+- [ ] 回归四条状态边：爽约 / 置完成 / 退号 / 停诊 —— 后两条已各自释放号源，**不得**重复写台账（`releaseToPool` / `suspendTaken` 与新增方法互斥）
+- [ ] 验收：连跑「爽约扫描 + 置完成」后对账 R1 归零或只剩真脏数据；`appt_reconcile_result` 结果行从 507 降到个位；`appt_slot_ledger` 的 `EXPIRE` 记录时间落在**状态流转时刻**而不是对账时刻
+- **边界**：不改对账口径（R1 仍保留兜底）、不动余量语义（`TAKEN → EXPIRED` 恒 0）、不改 A7/B2 的展示与查询条件
+
 ### S16 线上部署（阻塞：服务器未就绪）
 
 - [ ] 服务器与域名、HTTPS 证书、nginx 反代（H5 / admin / api 同域不同路径）
@@ -408,6 +418,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-26 | **S15 医院感细节完成**：患者端补四层说明信息——① `StepGuide` 五节点流程条（首页静态说明 / 详情页三态，四个终态只留终止说明）；② 就诊指南 + 院区详情（A1 四态，电话·门诊时间·交通指引按院区名称匹配虚构常量）；③ 须知与规则五组条款（数字对齐 PRD §6.7/§6.8/§6.9/§14.1）；④ `AppFooter`（5 页）与 `EmergencyTip`（3 页）。三页入匿名白名单（未登录可读），`pages.json` 21 → 24 页；DESIGN 补 §8.3 固定文案与 §9.15–§9.17 blueprint。**零后端接口、零表结构改动** | app + docs 各一提交 |
 | 2026-10-26 | **S15 验收收口 + 登记 S15.2**：验收发现预约详情「就诊医生」行把职称线值（`PHYSICIAN`）直接显示出来 → 统一走 `titleLabel()`；确认「已完成仍显示就诊码」符合契约 §4.3 与 `DESIGN §9.10`，不是缺陷；另发现「我的预约」缺 `SIGNED` 入口，登记为 **S15.2（未开始）** | app + docs 各一提交 |
 | 2026-10-26 | **S15.1 SnailJob 任务补种完成**：`appt_s14_snailjob_seed.sql` 由 2 条扩到 5 条（新增 `apptNoShowJob` / `apptCompleteJob` / `apptReconcileJob`，id 4–6），`next_trigger_at` 按任务分策略（爽约取下个 5 分钟整点，其余延次日）；dev 库同步补 3 行。**数据侧同步收口**：手工跑满爽约扫描（299 条过期 `BOOKED` → `NOSHOW`、5255 条 `AVAILABLE` → `EXPIRED`、补发 299 封 `NOSHOW_RECORD`），并把 admin 名下 6 条测试单改归属到造数虚拟账号 `1761400000000003199`，避免主账号违约计数触线被锁半年。实测 `apptNoShowJob` 于 01:00:00 自动触发并推进到 01:05:00 | backend + docs 各一提交 |
+| 2026-10-26 | **登记 S15.3 + 环境清理**：对账实测暴露「终态不释放号源」（R1 报 505 = 299 爽约 + 206 完成），登记为 **S15.3（未开始）**，写明修法与回归四条状态边；dev 库顺手删掉没有执行器的框架 `demo-job`，`sj_job` 归一为 5 条业务任务（id 2–6）；`appt_reconcile_result` 只有本轮 `RC20261026000001` 一批（507 条），无历史批次可清 | docs 提交 |
 
 ---
 
@@ -513,4 +524,5 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.7.0 | 2026-10-25 | S14 一键演示：`showcase/demo.sh`（八步 + 失败修复提示 + down/reset/logs）、demo compose（include 依赖、独立容器名与数据卷、SnailJob 服务）、`init-db.sh --full`（补框架表 / SnailJob 表 / 菜单树 / 收尾脚本、覆盖 OSS 地址）、后端 `application-docker.yml` 与多阶段 Dockerfile、admin/H5 nginx 运行时反代镜像、四枚镜像的 `image*.yml`、四份 `.env.example`；`docker run` 独立启动、真实验证码登录与 SnailJob 控制台实测通过 |
 | v0.7.1 | 2026-10-26 | S15 医院感细节：新增 `StepGuide` / `AppFooter` / `EmergencyTip` 三个展示组件与 `utils/campusProfile.ts`、`REG_STEPS` + `regStepProgress`；新增就诊指南 / 须知与规则 / 院区详情三页（`pages.json` 24 页、三页进匿名白名单）；首页加院区信息次入口与静态流程条，详情页加三态流程条，我的加就诊指南入口并统一页脚；DESIGN 补 §8.3 固定文案与 §9.15–§9.17 blueprint。**不改后端接口与表结构** |
 | v0.7.3 | 2026-10-26 | S15 验收收口：修复预约详情「就诊医生」把职称线值（`PHYSICIAN`）直接显示的问题（改走 `titleLabel()`）；确认「已完成仍显示就诊码」属契约 §4.3 与 `DESIGN §9.10` 口径、不是缺陷；登记 **S15.2**（我的预约缺 `SIGNED` 入口，含两个候选方案与验收样本） |
+| v0.7.4 | 2026-10-26 | S15.3 登记（未开始）：终态 `NOSHOW` / `COMPLETED` 不迁号源，导致对账 R1 每天报几百条幽灵占号（本轮 505 = 299 + 206）；修法与回归范围写进 §3 S15.3。README 仓库状态同步为「S15.2 / S15.3 与 S16 待做」 |
 | v0.7.2 | 2026-10-26 | S15.1 SnailJob 任务补种：`appt_s14_snailjob_seed.sql` 补齐 `apptNoShowJob` / `apptCompleteJob` / `apptReconcileJob`（2 → 5 条），`next_trigger_at` 按任务分策略（爽约取下个 5 分钟整点，其余延次日）；S14 边界那处欠账同步改写；dev 库同步插入 3 行；数据侧把 299 条过期 `BOOKED` 转 `NOSHOW`、5255 条号源转 `EXPIRED`，admin 名下 6 条测试单改归属虚拟账号避免违约触线 |
