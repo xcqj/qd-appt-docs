@@ -1320,3 +1320,46 @@ sj_job 3 条：demo-job / 每日放号（0 0 8 * * ?）/ apptPaymentCloseJob（*
 | 改完路由仍 404 | 浏览器缓存了 4xx 页面 | 每次改路由 |
 
 > 结论：**"能不能公网演示"已经有答案（能）**；剩下的是工程化——镜像可复现、可回滚、可一键重来，不在本节范围。
+
+---
+
+## 25. S16.1 部署形态与 wsl 发布链（2026-10-30）
+
+> 定位：**切片验收证据**。承接 §24 的手工联调，本节记录"拉同一镜像部署 + 可回滚 + 可重来"这条链真正跑通的数字。
+
+### 25.1 交付物
+
+| 仓 | 内容 |
+|---|---|
+| showcase | `deploy/compose.yml`（四应用，纯 image）、`compose.deps.yml`（MySQL/Redis/MinIO 快照）、`compose.wsl.yml`（18082/18083/18084，依赖仅回环）、`compose.cloud.yml`（依赖不发布 + mem_limit）、`compose.build.yml`（仅本地）；删除旧的 `docker-compose.yml`（含跨仓 `include`） |
+| showcase | `deploy/deploy.sh`（up / adopt / down / rollback / backup / restore / status）、`.github/workflows/release.yml`、`demo.sh` 改多 `-f`、`.env.example` 扩充 |
+| backend | `deploy/init-db.sh` 支持冒号分隔多份编排（单路径兼容） |
+
+### 25.2 实测数字（wsl 目标，全部实跑）
+
+| 场景 | 命令 | 结果 | 耗时 |
+|---|---|---|---|
+| 首次发布 | `./deploy.sh wsl up --tag v0.1.0` | 7 容器全 healthy + 5 条业务探针全绿；`.state/current` 写入 4 个镜像 digest | **39s** |
+| 回滚 | `./deploy.sh wsl rollback` | 探针全绿，`current`/`previous` 正确互换 | **42s** |
+| 前滚 | `./deploy.sh wsl up --tag v0.1.0` | 探针全绿 | **46s** |
+| 备份 | `./deploy.sh wsl backup` | MySQL 761K + MinIO 7.4K | **1s** |
+| 恢复 | `./deploy.sh wsl restore <dump>` | 停应用→灌库→起栈→探活全绿；行数前后一致 | **62s** |
+| 公网 | `curl https://admin.qdappt.us.ci/prod-api/appt/public/campus/list` | `code:200`，发布/回滚期间两域名全程可访问 | — |
+| CI 发布 | `release.yml` run #4（`deploy_target=wsl`, `tag=v0.1.0`） | preflight 37s + deploy 24s，**1m09s 全绿**；容器同 tag 幂等未重建 | **1m09s** |
+
+恢复前后行数（同一 dump 灌回）：注册单 **2001** / 号源 **20040** / 支付 **2001** / 站内信 **122**，四项完全一致。
+
+### 25.3 三个真问题（都是实跑才暴露的）
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `up` 在重建 redis 时崩：`Bind for 0.0.0.0:6380 failed: port is already allocated` | 开发态 `qd-appt-redis` 长期占 6380；演示栈此前靠 `demo.sh` 的 `+10000` 避让落在 16380，改成 compose 默认值后把既有栈顶掉了 | `compose.wsl.yml` redis 默认改 **16380**，并在 `deploy/.env` 钉死全部端口 |
+| 2 | CI 部署后 api `Restarting`、admin/h5 卡在 `Created` | 从 `~/qd-appt-deploy` 起栈时 `${APPT_DATA_DIR:-../data}` 解析成 `~/data`（空目录），MySQL 在空库里初始化出"有库无表" | `deploy.sh` 加**数据目录守卫**（有 `.state/current` 但无 `$DATA_DIR/mysql` → 拒绝启动）；数据目录统一为绝对路径 `/home/user01/qd-appt-data` |
+| 3 | run #1/#2 preflight 全红：`manifest inspect` 四枚全 401；修完后 `docker login` 报 `password is empty` | ① preflight 跑在托管 runner，读不到**别的仓**发布的私有包（本仓 `GITHUB_TOKEN` 无权限）② 只判 `vars.GHCR_PRIVATE` 没判 secret 存在 | preflight 改 `runs-on: [self-hosted, ...]`（用机器上的 `~/.docker/config.json`），并删除那个单开关登录步骤 |
+
+### 25.4 边界
+
+- `cloud` 目标只落了结构（`compose.cloud.yml` + `deploy.sh` 的 target 分支），**未在任何云主机上跑过**，归 S16.2；
+- 同一 tag 重复发布是**幂等 no-op**（compose 判定无变化即不重建），所以"发布耗时"不含容器重启；
+- SSE 连接约 55s 被中间层回收（§24.3）仍未修，与本次发布链无关；
+- 镜像冷拉验证针对本机已缓存的四枚 `v0.1.0`：`docker manifest inspect` 四枚均命中，`pull` 成功后再 `up`。

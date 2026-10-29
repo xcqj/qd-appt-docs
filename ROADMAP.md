@@ -7,7 +7,7 @@
 > **协作约定（2026-10-19）**：每个 S/E 切片由用户**显式开启**才进入开发；切片收尾后必须停止，**不自动进入下一片**。开场卡/收尾协议见 `AGENTS.md`（项目级）。
 
 - 项目：号源 QueueDepth（代码缩写 `appt`），四仓：`qd-appt-{backend,admin,app,docs}`
-- 建档：2026-10-18 ｜ 状态：v0.7.8（2026-10-29，S1–S15.3 已完成；S16 拆为 **S16.1 / S16.2**，均未开始——S16.1 的 wsl 目标已手工跑通，见 §3）
+- 建档：2026-10-18 ｜ 状态：v0.7.9（2026-10-30，S1–**S16.1** 已完成；S16.2 未开始，阻塞于服务器）
 
 ---
 
@@ -51,7 +51,7 @@
 | **S15.1** | **SnailJob 任务补种**：爽约扫描 / 置完成 / 日终对账三条任务固化进 seed | 换机或起 demo 容器即按 cron 自动跑，不再靠手工点 | backend / docs | SnailJob | S14 边界欠账 | **已完成 2026-10-26** |
 | **S15.2** | **已签到入口补口**：我的预约四个 tab 不含 `SIGNED`，已签到的预约在列表里没有入口 | 患者能在列表里找到已签到的预约 | docs / app | uni-app | S15 验收发现 | **已完成 2026-10-26** |
 | **S15.3** | **终态号源释放**：`NOSHOW` / `COMPLETED` 不迁 Slot，对账 R1 每天报几百条幽灵占号 | 终态流转即释放号源，R1 只剩真脏数据 | backend / docs | — | S15.1 实测发现 | **已完成 2026-10-26** |
-| **S16.1** | **部署形态与 wsl 发布链**（不依赖服务器）：compose 去 `build:` + 统一部署入口 `deploy.sh` + 镜像首推 GHCR + 备份 / 健康检查 / 日志轮转 | 拉同一镜像一次起全栈、可回滚、可重来 | docs / backend / showcase | docker compose / GHCR | S16 拆分（2026-10-29） | **未开始** |
+| **S16.1** | **部署形态与 wsl 发布链**（不依赖服务器）：compose 去 `build:` + 统一部署入口 `deploy.sh` + 镜像首推 GHCR + 备份 / 健康检查 / 日志轮转 | 拉同一镜像一次起全栈、可回滚、可重来 | docs / backend / showcase | docker compose / GHCR | S16 拆分（2026-10-29） | **已完成 2026-10-30** |
 | **S16.2** | **云目标与公网 HTTPS**（依赖服务器）：服务器 + 域名 + HTTPS + 反代 + 小程序合法域名 +（可选）监控 | 公网 HTTPS 可访问、小程序真机扫码 | docs / backend / app / admin | Caddy / SSH | S16 拆分（2026-10-29） | **未开始（阻塞：服务器未就绪）** |
 
 **阶段划分（2026-10-24 定）**：S1–S11 为「功能阶段」（可演示全链路，已完成）；**S12–S16 为「交付阶段」**（品牌、视觉、门面、一键演示、线上部署）。
@@ -303,16 +303,16 @@
 
 > 拆片理由：S16 原 5 条 checkbox 全部以"有服务器"为前提，但"compose 能拉镜像部署 + 镜像能推到 registry + 能回滚 + 能备份"**全部不需要服务器**，且是 S16.2 的前置。原表述"阻塞：服务器"会把这些活长期挂在"未开始"里。
 
-- [ ] **compose 去 `build:`**：`showcase/deploy` 拆成 `compose.yml`（纯镜像）+ `compose.deps.yml` + `compose.{wsl,cloud}.yml` + `compose.build.yml`；`demo.sh` 改为引用新文件且行为不回退
-- [ ] **统一部署入口**：`deploy/deploy.sh`（up / down / rollback / backup / restore / status）+ `.state/{current,previous}` 记录镜像 digest
-- [ ] **镜像首推 GHCR**：打 `v0.1.0` 让四枚 `appt-*` 镜像真推到 `ghcr.io/xcqj`（清 S14 边界欠账：本地只验证过 `docker build` / `docker run`）；验收含"本机 `docker rmi` 后从 registry 冷拉回来能跑"
-- [ ] **wsl 发布链**：`release.yml`（`deploy_target=wsl`，唯一入口 `workflow_dispatch`）+ 仓库级 self-hosted runner（不接 PR）
-- [ ] 数据备份与恢复演练、发布探活门禁、日志轮转（本机即可验收）
-- [ ] 端口按方案 §7.6 钉进 `showcase/deploy/.env`（开发 8xxx / 演示 18xxx）
-- **2026-10-29 已先行（不计本片验收）**：`wsl` 目标已手工打通——`qdappt.us.ci`（DNSHE 免费域名）接入 Cloudflare、Named Tunnel 常驻（systemd `enabled`，4 条连接）、`admin` / `demo` 两域名指向容器 `18083` / `18084`、HTTPS + 验证码 + RSA/AES 登录、下单 → Mock 支付 → 站内信。方案、踩坑与操作步骤见 `deployment-cicd-plan.md` §2.7 / §2.8 / §9.6。
-- **为什么不算完成**：镜像仍是**本地构建**（GHCR 零推送）、compose 仍带 `build:`、没有 `deploy.sh`、没有回滚与备份。
-- **边界**：不做云服务器、不做域名 HTTPS 反代（归 S16.2）；不改业务代码，`appt` 模块与 20 张表零改动。
-- **验收**：`./deploy.sh wsl --tag v0.1.0` 一次起全栈、探针全绿；`--rollback` 演练成功再前滚；四枚镜像可从 GHCR 冷拉
+- [x] **compose 去 `build:`**：`showcase/deploy` 拆成 `compose.yml`（纯镜像）+ `compose.deps.yml` + `compose.{wsl,cloud}.yml` + `compose.build.yml`；`demo.sh` 改为引用新文件且行为不回退
+- [x] **统一部署入口**：`deploy/deploy.sh`（up / adopt / down / rollback / backup / restore / status）+ `.state/{current,previous}` 记录镜像 digest
+- [x] **镜像首推 GHCR**：打 `v0.1.0` 让四枚 `appt-*` 镜像真推到 `ghcr.io/xcqj`（清 S14 边界欠账：本地只验证过 `docker build` / `docker run`）；验收含"本机 `docker rmi` 后从 registry 冷拉回来能跑"
+- [x] **wsl 发布链**：`release.yml`（`deploy_target=wsl`，唯一入口 `workflow_dispatch`）+ 仓库级 self-hosted runner（不接 PR）
+- [x] 数据备份与恢复演练、发布探活门禁、日志轮转（本机即可验收）
+- [x] 端口按方案 §7.6 钉进 `showcase/deploy/.env`（开发 8xxx / 演示 18xxx）
+- **2026-10-30 实测（wsl 目标，全套跑通）**：发布 `v0.1.0` **39s**（7 容器 healthy / 五条业务探针全绿）→ 回滚 `latest` **42s** → 前滚 **46s**；备份 **1s**（MySQL 761K + MinIO 7.4K）→ 恢复 **62s**，恢复前后行数一致（注册单 2001 / 号源 20040 / 支付 2001 / 站内信 122）。公网 `admin` / `demo` 两域名全程 200。CI 侧 `release.yml` run #4 **1m09s 全绿**（preflight 37s + deploy 24s，自托管 runner），`.state/current` 由 CI 写入并含四镜像 digest。
+- **踩到并修掉的三个真问题**：① 演示栈 redis 宿主口撞开发态 6380 → 默认改 **16380**；② 从 `~/qd-appt-deploy` 起栈时 `../data` 解析到 `~/data`，空库导致 api crash loop → `deploy.sh` 加**数据目录守卫**（有部署记录但无 `$DATA_DIR/mysql` 直接拒绝启动），数据目录统一为绝对路径；③ preflight 跑在托管 runner 上读不到跨仓私有包 → 挪到自托管 runner。
+- **边界**：不做云服务器、不做域名 HTTPS 反代（归 S16.2）；不改业务代码，`appt` 模块与 20 张表零改动；SSE 连接 55s 被中间层回收属已知现象，**先记录不修**（`deployment-cicd-plan.md` §2.8 第 9 条）。
+- **验收**：`./deploy.sh wsl up --tag v0.1.0` 一次起全栈、探针全绿；`rollback` 演练成功再前滚；四枚镜像可从 GHCR 冷拉 —— **全部达成**
 
 ### S16.2 云目标与公网 HTTPS（阻塞：服务器未就绪，2026-10-29 由 S16 拆出）
 
@@ -443,6 +443,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-26 | **S15.2 已签到入口完成**：「我的预约」的「已预约」tab 内加子筛选「已预约 / 已签到」（`subState` 按 tab 记忆 + `queryStatus` 三分支，B2 仍一次一个状态）；`SIGNED` 行由错误的「再次预约」改为「查看就诊码」；已签到空态改专用文案；`DESIGN §9.9` 的两级结构与「状态 → 动作」口径按实现订正。零后端改动 | app + docs 各一提交 |
 | 2026-10-26 | **S15.3 终态号源释放完成**：`SlotStateService.expireTaken()`（`TAKEN → EXPIRED`、清占用、写 `EXPIRE` 台账、余量 0）+ `RegistrationStateService.markNoShow / markCompleted` 同事务调用；两个任务查询补 `slot_id`。实测两条夹具各 `affected=1`，台账时间落在流转时刻（02:47:13 / 02:47:59），随后「立即对账」七查全 0、结果 0 行（S15.1 时为 507 条），幽灵占号 0 | backend + docs 各一提交 |
 | 2026-10-29 | **部署方案 + wsl 公网联调 + S16 拆片**：新增 `deployment-cicd-plan.md`（只写"怎么做"，进度以本文件为准；sd-blog 降为附录 C，不并行）；本机手工打通 wsl 目标——DNSHE 免费域名 `qdappt.us.ci` 接入 Cloudflare、Named Tunnel systemd 常驻、`admin`/`demo` → 容器 18083/18084、HTTPS + 验证码 + RSA/AES 登录、下单 → Mock 支付 → 站内信；SSE 通道可用但连接约 55 s 被中间层回收（心跳 60 s），**决定先记录不修**。**S16 拆为 S16.1（不依赖服务器）/ S16.2（依赖服务器）**，原 5 条 checkbox 按"是否需要服务器"重新归属。未勾任何框、未推镜像、未改代码 | 仅 docs 仓 |
+| 2026-10-30 | **S16.1 完成**：compose 五件套去 `build:`（部署机只 clone showcase）；`deploy.sh` 七子命令 + `.state` 回滚 + 数据目录守卫；四枚镜像首推 GHCR `v0.1.0`；`release.yml` 走自托管 runner（run #4 1m09s 全绿）。实测：发布 39s / 回滚 42s / 前滚 46s / 备份 1s / 恢复 62s（行数前后一致），公网两域名全程 200。三个真问题已修：redis 6380 撞车、`../data` 解析成空库、preflight 读不到跨仓私有包 | showcase 5 提交 + backend 1 提交 + docs |
 
 ---
 
@@ -554,3 +555,4 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.7.2 | 2026-10-26 | S15.1 SnailJob 任务补种：`appt_s14_snailjob_seed.sql` 补齐 `apptNoShowJob` / `apptCompleteJob` / `apptReconcileJob`（2 → 5 条），`next_trigger_at` 按任务分策略（爽约取下个 5 分钟整点，其余延次日）；S14 边界那处欠账同步改写；dev 库同步插入 3 行；数据侧把 299 条过期 `BOOKED` 转 `NOSHOW`、5255 条号源转 `EXPIRED`，admin 名下 6 条测试单改归属虚拟账号避免违约触线 |
 | v0.7.7 | 2026-10-29 | **部署方案 + wsl 公网联调**：新增 `deployment-cicd-plan.md`（**方案文档，只写「怎么做」，进度以本文件为准**；sd-blog 降为附录 C，本轮不并行）；本机实测打通 `wsl` 目标——DNSHE 免费域名 `qdappt.us.ci` 接入 Cloudflare（NS 纯化为两台 CF）、Named Tunnel 以 systemd 常驻、`admin`/`demo` 两域名分别指向容器 18083/18084、HTTPS + 验证码 + RSA/AES 登录、下单→Mock 支付→站内信；SSE 通道可用但连接约 55 s 被中间层回收（服务端心跳 60 s），**先记录不修**。**未勾 S16 任何 checkbox、未推镜像、未改任何代码**；S16 是否拆 S16.1/S16.2 待拍板 | 仅 docs 仓 |
 | v0.7.8 | 2026-10-29 | **S16 拆分拍板**：按"是否需要服务器"拆为 **S16.1**（compose 去 `build:` / 统一部署入口 `deploy.sh` / 镜像首推 GHCR / wsl 发布链 / 备份与日志轮转——本机即可验收）与 **S16.2**（服务器 + 域名 + HTTPS + 反代 + 小程序合法域名 + 可选监控——阻塞于服务器）。§2 增两行、§3 拆两节并按归属重排原 5 条 checkbox（演示数据重置入口归 S16.2 并标注属应用功能）、§5/§8 同步、README 与 `test-evidence` §24 口径对齐；**两片均保持「未开始」，不预勾任何项** | 仅 docs 仓 |
+| v0.7.9 | 2026-10-30 | **S16.1 完成**：showcase 编排拆五件套（`compose.yml` / `compose.deps.yml` / `compose.wsl.yml` / `compose.cloud.yml` / `compose.build.yml`，删除跨仓 include 的旧文件）、`demo.sh` 改多 `-f`（行为不回退）、新增 `deploy.sh`（up/adopt/down/rollback/backup/restore/status + `.state` digest + 数据目录守卫）、新增 `release.yml`（dispatch 唯一入口，preflight 与部署均走自托管 runner）；backend `init-db.sh` 支持冒号分隔多编排。四枚镜像首推 GHCR `v0.1.0` 并冷拉验证；wsl 目标实跑发布 39s / 回滚 42s / 前滚 46s / 备份 1s / 恢复 62s，CI 发布 run #4 1m09s 全绿。**S16.2 仍未开始（等服务器）**。§3 六条 checkbox 全部勾选，实测数字见 `test-evidence.md` §25 | showcase + backend + docs |
