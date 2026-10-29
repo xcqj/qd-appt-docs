@@ -7,7 +7,7 @@
 > **协作约定（2026-10-19）**：每个 S/E 切片由用户**显式开启**才进入开发；切片收尾后必须停止，**不自动进入下一片**。开场卡/收尾协议见 `AGENTS.md`（项目级）。
 
 - 项目：号源 QueueDepth（代码缩写 `appt`），四仓：`qd-appt-{backend,admin,app,docs}`
-- 建档：2026-10-18 ｜ 状态：v0.4.2（2026-10-20，S1–S4 已完成）
+- 建档：2026-10-18 ｜ 状态：v0.7.8（2026-10-29，S1–S15.3 已完成；S16 拆为 **S16.1 / S16.2**，均未开始——S16.1 的 wsl 目标已手工跑通，见 §3）
 
 ---
 
@@ -51,10 +51,11 @@
 | **S15.1** | **SnailJob 任务补种**：爽约扫描 / 置完成 / 日终对账三条任务固化进 seed | 换机或起 demo 容器即按 cron 自动跑，不再靠手工点 | backend / docs | SnailJob | S14 边界欠账 | **已完成 2026-10-26** |
 | **S15.2** | **已签到入口补口**：我的预约四个 tab 不含 `SIGNED`，已签到的预约在列表里没有入口 | 患者能在列表里找到已签到的预约 | docs / app | uni-app | S15 验收发现 | **已完成 2026-10-26** |
 | **S15.3** | **终态号源释放**：`NOSHOW` / `COMPLETED` 不迁 Slot，对账 R1 每天报几百条幽灵占号 | 终态流转即释放号源，R1 只剩真脏数据 | backend / docs | — | S15.1 实测发现 | **已完成 2026-10-26** |
-| **S16** | **线上部署**：域名 + HTTPS + 反代 + 备份 + 健康检查 +（可选）监控 | 公网可访问、可扫码 | docs / backend / app / admin | — | — | **未开始（阻塞：服务器未就绪）** |
+| **S16.1** | **部署形态与 wsl 发布链**（不依赖服务器）：compose 去 `build:` + 统一部署入口 `deploy.sh` + 镜像首推 GHCR + 备份 / 健康检查 / 日志轮转 | 拉同一镜像一次起全栈、可回滚、可重来 | docs / backend / showcase | docker compose / GHCR | S16 拆分（2026-10-29） | **未开始** |
+| **S16.2** | **云目标与公网 HTTPS**（依赖服务器）：服务器 + 域名 + HTTPS + 反代 + 小程序合法域名 +（可选）监控 | 公网 HTTPS 可访问、小程序真机扫码 | docs / backend / app / admin | Caddy / SSH | S16 拆分（2026-10-29） | **未开始（阻塞：服务器未就绪）** |
 
 **阶段划分（2026-10-24 定）**：S1–S11 为「功能阶段」（可演示全链路，已完成）；**S12–S16 为「交付阶段」**（品牌、视觉、门面、一键演示、线上部署）。
-交付阶段的共同验收口径：**① 三端截图对照通过 ② 无框架默认文案残留 ③ 门禁全绿 ④ 文档与实现零偏差**。S16 依赖服务器，未到位前只做容器化与镜像产物（S14），不做线上部署。
+交付阶段的共同验收口径：**① 三端截图对照通过 ② 无框架默认文案残留 ③ 门禁全绿 ④ 文档与实现零偏差**。S16 已拆为 **S16.1**（不依赖服务器：compose 去 `build:` / 部署脚本 / 镜像首推 / wsl 发布链）与 **S16.2**（依赖服务器：云目标 + 公网 HTTPS）；前者可立即开工，后者等服务器到位。
 
 **集成测试**（定义见 PRD §12，此处绑定切片）：
 - ① 50 并发争抢同一时间点，恰好 1 笔成功 —— S3（**2026-10-20 通过**：1 成交 / 49 `SLOT_GONE`）
@@ -251,7 +252,7 @@
 - [x] **镜像 UI 验收修复**：① `SvgIcon` 提权（生产 CSS 顺序让 Element Plus 的 `height: inherit` 生效，svg 退回 300×150，把登录输入框撑到 152px）；② 恢复「运维对账 → 任务调度中心」入口（`appt_s13_menu_showcase.sql` 第 5 段）+ admin nginx `/snail-job/` 反代；③ 侧栏默认由 S13 的浅色改回深蓝（与项目既有观感一致，浅色仍可切换），并加一次性迁移对齐旧 localStorage
 - [x] **SnailJob 服务端随 demo 发布**：新增 `Dockerfile.snailjob` + `image-snailjob.yml` → `ghcr.io/xcqj/appt-snailjob`；compose 起 `snailjob` 服务（宿主 18800 控制台 / 27888 gRPC），`init-db.sh --full` 追加 `ry_job.sql` + `appt_s14_snailjob_seed.sql`（把开发期手工建的「每日放号」「apptPaymentCloseJob」固化，`next_trigger_at` 重置到次日避免启动即跑，并清掉无执行器的框架 `demo-job`）；后台客户端默认 `APPT_SNAILJOB_ENABLED=true` 连 `snailjob:17888`，namespace `dev`
 - **验收**：空机器（有 Docker）一条命令起全栈 — **2026-10-25 实测** `./demo.sh` 首次 **1m44s** / 复跑 **58s**，八步全绿（明细见 `test-evidence.md` §19）；四镜像可 `docker run` 独立启动：admin 把 `APPT_API_UPSTREAM` 指向错误地址返回 **502**、指向正确地址返回 **200**，证明后端地址来自运行时环境变量而非镜像内写死；**验证码接口 `/auth/code` 200 + 两套账号按真实「验证码 + RSA/AES 加密」链路登录 200**；**SnailJob 控制台（18800）登录可见 2 个任务、5 个业务执行器在线**
-- **边界**：不含 HTTPS / 域名 / nginx 统一反代 / 服务器部署（归 S16）；SnailJob 任务在 S14 只固化了 2 条（放号 / 关单），爽约 / 置完成 / 对账三条由 **S15.1** 补进同一 seed（2026-10-26 已完成）；小程序包不在镜像内（需真实 AppID 与微信开发者工具）；`ghcr` 推送需在远端打 tag 后由 workflow 执行，本地只验证 `docker build` 与 `docker run`
+- **边界**：不含 HTTPS / 域名 / nginx 统一反代 / 服务器部署（归 **S16.2**）；SnailJob 任务在 S14 只固化了 2 条（放号 / 关单），爽约 / 置完成 / 对账三条由 **S15.1** 补进同一 seed（2026-10-26 已完成）；小程序包不在镜像内（需真实 AppID 与微信开发者工具）；`ghcr` 推送需在远端打 tag 后由 workflow 执行，本地只验证 `docker build` 与 `docker run`（**真推归 S16.1**）
 
 ### S15 医院感细节
 
@@ -298,14 +299,30 @@
 - **验收**：连跑「爽约扫描 + 置完成」后对账 R1 归零或只剩真脏数据；`appt_reconcile_result` 结果行从 507 降到个位；台账 `EXPIRE` 落在状态流转时刻 —— **2026-10-26 实测**：用两条「回滚式」夹具（`R20261023000016` 退回 `BOOKED` + slot `TAKEN`、`RS70000003876` 退回 `SIGNED` + slot `TAKEN`），跑爽约扫描 **affected=1** → `NOSHOW` + slot `EXPIRED` + 台账 `EXPIRE (TAKEN→EXPIRED)` @**02:47:13**；跑置完成 **affected=1** → `COMPLETED` + slot `EXPIRED` + 台账 `EXPIRE` @**02:47:59**；「立即对账」批次 `RC20261026000002` **907ms、七查全 0、新批次结果 0 行**（旧批 507 行保留作历史）；幽灵占号复核 **0**（基线亦为 0，说明本轮未产生新的，505 那批已由上一轮对账修掉）；`mvn -pl ruoyi-modules/appt -am clean compile` 通过
 - **边界**：不改对账口径（R1 仍保留兜底）、不动余量语义（`TAKEN → EXPIRED` 恒 0）、不改 A7/B2 的展示与查询条件；本片只处理 `NOSHOW` / `COMPLETED` 两条终态，退号与停诊的释放路径保持原样
 
-### S16 线上部署（阻塞：服务器未就绪）
+### S16.1 部署形态与 wsl 发布链（不依赖服务器，2026-10-29 由 S16 拆出）
+
+> 拆片理由：S16 原 5 条 checkbox 全部以"有服务器"为前提，但"compose 能拉镜像部署 + 镜像能推到 registry + 能回滚 + 能备份"**全部不需要服务器**，且是 S16.2 的前置。原表述"阻塞：服务器"会把这些活长期挂在"未开始"里。
+
+- [ ] **compose 去 `build:`**：`showcase/deploy` 拆成 `compose.yml`（纯镜像）+ `compose.deps.yml` + `compose.{wsl,cloud}.yml` + `compose.build.yml`；`demo.sh` 改为引用新文件且行为不回退
+- [ ] **统一部署入口**：`deploy/deploy.sh`（up / down / rollback / backup / restore / status）+ `.state/{current,previous}` 记录镜像 digest
+- [ ] **镜像首推 GHCR**：打 `v0.1.0` 让四枚 `appt-*` 镜像真推到 `ghcr.io/xcqj`（清 S14 边界欠账：本地只验证过 `docker build` / `docker run`）；验收含"本机 `docker rmi` 后从 registry 冷拉回来能跑"
+- [ ] **wsl 发布链**：`release.yml`（`deploy_target=wsl`，唯一入口 `workflow_dispatch`）+ 仓库级 self-hosted runner（不接 PR）
+- [ ] 数据备份与恢复演练、发布探活门禁、日志轮转（本机即可验收）
+- [ ] 端口按方案 §7.6 钉进 `showcase/deploy/.env`（开发 8xxx / 演示 18xxx）
+- **2026-10-29 已先行（不计本片验收）**：`wsl` 目标已手工打通——`qdappt.us.ci`（DNSHE 免费域名）接入 Cloudflare、Named Tunnel 常驻（systemd `enabled`，4 条连接）、`admin` / `demo` 两域名指向容器 `18083` / `18084`、HTTPS + 验证码 + RSA/AES 登录、下单 → Mock 支付 → 站内信。方案、踩坑与操作步骤见 `deployment-cicd-plan.md` §2.7 / §2.8 / §9.6。
+- **为什么不算完成**：镜像仍是**本地构建**（GHCR 零推送）、compose 仍带 `build:`、没有 `deploy.sh`、没有回滚与备份。
+- **边界**：不做云服务器、不做域名 HTTPS 反代（归 S16.2）；不改业务代码，`appt` 模块与 20 张表零改动。
+- **验收**：`./deploy.sh wsl --tag v0.1.0` 一次起全栈、探针全绿；`--rollback` 演练成功再前滚；四枚镜像可从 GHCR 冷拉
+
+### S16.2 云目标与公网 HTTPS（阻塞：服务器未就绪，2026-10-29 由 S16 拆出）
 
 - [ ] 服务器与域名、HTTPS 证书、nginx 反代（H5 / admin / api 同域不同路径）
-- [ ] 数据备份与恢复演练、健康检查、日志轮转
-- [ ] 演示数据重置入口（管理员专用，避免公开危险操作）
+- [ ] `release.yml` 的 cloud 分支：SSH + `known_hosts` + ufw 暴露面自检（`nmap` 只看到 22/80/443）
 - [ ] 小程序后台配置 request 合法域名（扫码需 HTTPS）
+- [ ] 演示数据重置入口（管理员专用，避免公开危险操作）——**属应用功能**，落地时可按需单列
 - [ ] 可选：Prometheus + Grafana 与告警
-- **验收**：公网可访问、两个角色都能登录、小程序真机扫码可用
+- **边界**：不含 compose 改造与 wsl 发布链（归 S16.1）；`cloud` 的 compose 覆盖文件在 S16.1 已留好结构，本片只做验收与加固
+- **验收**：公网 HTTPS 可访问、两个角色都能登录、小程序真机扫码可用、暴露面自检通过
 
 ### 3.9 核心亮点 ↔ 切片 ↔ 验收证据
 
@@ -425,6 +442,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-26 | **登记 S15.3 + 环境清理**：对账实测暴露「终态不释放号源」（R1 报 505 = 299 爽约 + 206 完成），登记为 **S15.3（未开始）**，写明修法与回归四条状态边；dev 库顺手删掉没有执行器的框架 `demo-job`，`sj_job` 归一为 5 条业务任务（id 2–6）；`appt_reconcile_result` 只有本轮 `RC20261026000001` 一批（507 条），无历史批次可清 | docs 提交 |
 | 2026-10-26 | **S15.2 已签到入口完成**：「我的预约」的「已预约」tab 内加子筛选「已预约 / 已签到」（`subState` 按 tab 记忆 + `queryStatus` 三分支，B2 仍一次一个状态）；`SIGNED` 行由错误的「再次预约」改为「查看就诊码」；已签到空态改专用文案；`DESIGN §9.9` 的两级结构与「状态 → 动作」口径按实现订正。零后端改动 | app + docs 各一提交 |
 | 2026-10-26 | **S15.3 终态号源释放完成**：`SlotStateService.expireTaken()`（`TAKEN → EXPIRED`、清占用、写 `EXPIRE` 台账、余量 0）+ `RegistrationStateService.markNoShow / markCompleted` 同事务调用；两个任务查询补 `slot_id`。实测两条夹具各 `affected=1`，台账时间落在流转时刻（02:47:13 / 02:47:59），随后「立即对账」七查全 0、结果 0 行（S15.1 时为 507 条），幽灵占号 0 | backend + docs 各一提交 |
+| 2026-10-29 | **部署方案 + wsl 公网联调 + S16 拆片**：新增 `deployment-cicd-plan.md`（只写"怎么做"，进度以本文件为准；sd-blog 降为附录 C，不并行）；本机手工打通 wsl 目标——DNSHE 免费域名 `qdappt.us.ci` 接入 Cloudflare、Named Tunnel systemd 常驻、`admin`/`demo` → 容器 18083/18084、HTTPS + 验证码 + RSA/AES 登录、下单 → Mock 支付 → 站内信；SSE 通道可用但连接约 55 s 被中间层回收（心跳 60 s），**决定先记录不修**。**S16 拆为 S16.1（不依赖服务器）/ S16.2（依赖服务器）**，原 5 条 checkbox 按"是否需要服务器"重新归属。未勾任何框、未推镜像、未改代码 | 仅 docs 仓 |
 
 ---
 
@@ -534,3 +552,5 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.7.5 | 2026-10-26 | S15.2 已签到入口：「已预约」tab 内加子筛选「已预约 / 已签到」（`subState` 按 tab 记忆 + `queryStatus` 三分支），`SIGNED` 行改「查看就诊码」、空态改专用文案；`DESIGN §9.9` 补两级结构并订正「状态 → 动作」段（原文与实现不符）。零后端改动 |
 | v0.7.6 | 2026-10-26 | S15.3 终态号源释放：新增 `SlotStateService.expireTaken()`（`TAKEN → EXPIRED`，余量 0，写 `EXPIRE` 台账），`markNoShow` / `markCompleted` 同事务调用；两个任务查询补 `slot_id`。实测对账 R1 从 505 条降到 **0 行**，台账时间从「对账时刻」回到「状态流转时刻」；§21.5 的问题观察同步标注为已修 |
 | v0.7.2 | 2026-10-26 | S15.1 SnailJob 任务补种：`appt_s14_snailjob_seed.sql` 补齐 `apptNoShowJob` / `apptCompleteJob` / `apptReconcileJob`（2 → 5 条），`next_trigger_at` 按任务分策略（爽约取下个 5 分钟整点，其余延次日）；S14 边界那处欠账同步改写；dev 库同步插入 3 行；数据侧把 299 条过期 `BOOKED` 转 `NOSHOW`、5255 条号源转 `EXPIRED`，admin 名下 6 条测试单改归属虚拟账号避免违约触线 |
+| v0.7.7 | 2026-10-29 | **部署方案 + wsl 公网联调**：新增 `deployment-cicd-plan.md`（**方案文档，只写「怎么做」，进度以本文件为准**；sd-blog 降为附录 C，本轮不并行）；本机实测打通 `wsl` 目标——DNSHE 免费域名 `qdappt.us.ci` 接入 Cloudflare（NS 纯化为两台 CF）、Named Tunnel 以 systemd 常驻、`admin`/`demo` 两域名分别指向容器 18083/18084、HTTPS + 验证码 + RSA/AES 登录、下单→Mock 支付→站内信；SSE 通道可用但连接约 55 s 被中间层回收（服务端心跳 60 s），**先记录不修**。**未勾 S16 任何 checkbox、未推镜像、未改任何代码**；S16 是否拆 S16.1/S16.2 待拍板 | 仅 docs 仓 |
+| v0.7.8 | 2026-10-29 | **S16 拆分拍板**：按"是否需要服务器"拆为 **S16.1**（compose 去 `build:` / 统一部署入口 `deploy.sh` / 镜像首推 GHCR / wsl 发布链 / 备份与日志轮转——本机即可验收）与 **S16.2**（服务器 + 域名 + HTTPS + 反代 + 小程序合法域名 + 可选监控——阻塞于服务器）。§2 增两行、§3 拆两节并按归属重排原 5 条 checkbox（演示数据重置入口归 S16.2 并标注属应用功能）、§5/§8 同步、README 与 `test-evidence` §24 口径对齐；**两片均保持「未开始」，不预勾任何项** | 仅 docs 仓 |

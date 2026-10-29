@@ -1,0 +1,3 @@
+# 一次性 AI 提示词（任务书，非项目文档）：内容已并入 deployment-cicd-plan.md，
+# 2026-10-29 决定不入库，避免出现「第二份部署要求」与 ROADMAP 抢权威。
+cicd-deployment-plan-agent-prompt.md

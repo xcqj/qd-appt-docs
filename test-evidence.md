@@ -1270,3 +1270,53 @@ sj_job 3 条：demo-job / 每日放号（0 0 8 * * ?）/ apptPaymentCloseJob（*
 - 余量语义不变：`TAKEN → EXPIRED` 恒 0，`AVAILABLE → EXPIRED` 才是 −1；
 - 不改 A7 / B2 的查询条件与展示；
 - 夹具是**一次性数据操作**（回滚到流转前状态），不进 seed；正常环境里这条边由真实流转触发。
+
+---
+
+## 24. 部署方案与 wsl 公网联调（S16.1 预研，2026-10-29）
+
+> 定位：**不是切片验收**。S16.1 在 ROADMAP §2 仍是「未开始」；本节记录的是"部署形态的可行性已被证明"以及为此付出的调试成本。镜像仍为本地构建，**GHCR 零推送**，没有任何部署流水线。
+
+### 24.1 环境与基线
+
+| 项 | 值 |
+|---|---|
+| 主机 | Windows 10 + WSL2 Ubuntu；主机内存 32G，WSL 分配 16G |
+| Docker / Compose | 29.7.2 / v5.5.0 |
+| 隧道客户端 | cloudflared 2026.10.5，systemd 服务 `enabled` |
+| 部署栈 | `showcase/deploy` 的 `qd-appt-demo` 项目，7 个容器（mysql / redis / minio / snailjob / api / admin / h5） |
+| 宿主端口 | api **18082** / admin **18083** / h5 **18084**（8082–8084 被开发态 `pnpm dev` 占用，`demo.sh` 按 +10000 避让） |
+| 域名 | `qdappt.us.ci`（DNSHE 免费二级域名，到期 2027-10-29），NS 已托管到 Cloudflare 且 Active |
+
+### 24.2 实测结果
+
+| 环节 | 结果 | 复现命令 |
+|---|---|---|
+| DNS 委派 | 只返回两台 Cloudflare NS | `dig +short NS qdappt.us.ci @1.1.1.1` |
+| 隧道连接 | 4 条 `Registered tunnel connection`（lax01 / lax05） | `sudo journalctl -u cloudflared -n 40 \| grep Registered` |
+| 站点可达 | 两域名均 200，证书由 Cloudflare 边缘签发 | `curl -sI https://admin.qdappt.us.ci/` |
+| 反代到 api | 匿名院区接口 `code:200` | `curl -s https://demo.qdappt.us.ci/dev-api/appt/public/campus/list` |
+| 登录链路 | 算术验证码 + RSA/AES 加密登录成功（`admin/admin123`） | 浏览器人工 |
+| 业务链路 | 下单 → Mock 支付成功 → 站内信 2 条（`BOOK_SUCCESS` / `PAY_SUCCESS`）→ 详情可打开 | `/dev-api/appt/patient/notice/list` 返回 `code:200` |
+| SSE 通道 | `text/event-stream` 原样透传、`Cf-Cache-Status: DYNAMIC`、`:connected` 抵达 | DevTools → Network → `resource/message` |
+| 开机自启 | `docker` / `cloudflared` 均 enabled | `systemctl is-enabled docker cloudflared` |
+
+### 24.3 观察到的现象（已决定不改代码）
+
+- **SSE 连接寿命约 55 s**：服务端心跳 `heartbeatInterval = 60 s`（`MessageProperties`），连接在首次心跳之前就被中间层按空闲回收；前端 `autoReconnect.delay = 5000`，表现为每 ~60 s 一轮重连。判定依据是重连时**重新做了 TCP+TLS 握手**（`Initial connection` + `SSL` 各 1.42 s），说明是对端断连而非前端主动 `closePush()`。
+- 影响面：仅管理后台「实时提醒」；站内信落库（`appt_notice`）是兜底，业务功能不受影响。
+- **2026-10-29 决定**：先记录不修。若将来要修，把 `message.heartbeat-interval` 调到 20 s 并重建 api 镜像——属后端仓改动，不放进工程化切片。
+
+### 24.4 调试成本（供后续排期参考）
+
+| 卡点 | 根因 | 频次 |
+|---|---|---|
+| Cloudflare 一直 Pending | DNSHE 侧只加 CF 的 NS、**没删**自己那两台（混合委派） | 一次 |
+| Zero Trust 侧栏找不到 Tunnels | 2026 UI 已挪到账号级 `Networking > Tunnels` | 一次 |
+| `cloudflared service install` 报已存在 | 旧 unit 残留，需先 uninstall | 一次 |
+| `demo` 打不开 / `admin` 显示患者端 | **两条同名 `admin` Public Hostname**，`demo` 实际无路由 | 一次 |
+| admin 域名报 Vite `Blocked request … allowedHosts` | 隧道指向 8083 的 `pnpm dev`，容器在 18083 | 一次 |
+| PowerShell `curl -I` 报「驱动器 https 不存在」 | PowerShell 把 `curl` 别名成 `Invoke-WebRequest` | 一次 |
+| 改完路由仍 404 | 浏览器缓存了 4xx 页面 | 每次改路由 |
+
+> 结论：**"能不能公网演示"已经有答案（能）**；剩下的是工程化——镜像可复现、可回滚、可一键重来，不在本节范围。
