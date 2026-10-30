@@ -7,7 +7,7 @@
 > **协作约定（2026-10-19）**：每个 S/E 切片由用户**显式开启**才进入开发；切片收尾后必须停止，**不自动进入下一片**。开场卡/收尾协议见 `AGENTS.md`（项目级）。
 
 - 项目：号源 QueueDepth（代码缩写 `appt`），四仓：`qd-appt-{backend,admin,app,docs}`
-- 建档：2026-10-18 ｜ 状态：v0.7.10（2026-10-30，S1–**S16.1** 已完成；S16.2 未开始，阻塞于服务器）
+- 建档：2026-10-18 ｜ 状态：v0.7.11（2026-10-30，S1–**S16.1** 已完成；S16.2 未开始，阻塞于服务器）
 
 ---
 
@@ -445,6 +445,7 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | 2026-10-29 | **部署方案 + wsl 公网联调 + S16 拆片**：新增 `deployment-cicd-plan.md`（只写"怎么做"，进度以本文件为准；sd-blog 降为附录 C，不并行）；本机手工打通 wsl 目标——DNSHE 免费域名 `qdappt.us.ci` 接入 Cloudflare、Named Tunnel systemd 常驻、`admin`/`demo` → 容器 18083/18084、HTTPS + 验证码 + RSA/AES 登录、下单 → Mock 支付 → 站内信；SSE 通道可用但连接约 55 s 被中间层回收（心跳 60 s），**决定先记录不修**。**S16 拆为 S16.1（不依赖服务器）/ S16.2（依赖服务器）**，原 5 条 checkbox 按"是否需要服务器"重新归属。未勾任何框、未推镜像、未改代码 | 仅 docs 仓 |
 | 2026-10-30 | **S16.1 完成**：compose 五件套去 `build:`（部署机只 clone showcase）；`deploy.sh` 七子命令 + `.state` 回滚 + 数据目录守卫；四枚镜像首推 GHCR `v0.1.0`；`release.yml` 走自托管 runner（run #4 1m09s 全绿）。实测：发布 39s / 回滚 42s / 前滚 46s / 备份 1s / 恢复 62s（行数前后一致），公网两域名全程 200。三个真问题已修：redis 6380 撞车、`../data` 解析成空库、preflight 读不到跨仓私有包 | showcase 5 提交 + backend 1 提交 + docs |
 | 2026-10-30 | **重启后自启复验 + 部署文档纠偏**：整机重启后演示栈 7 个容器自动恢复（`Up 3 minutes`、六项 healthy）、五项业务探活全绿、数据目录 `/home/user01/qd-appt-data` 266M；同时暴露两处口径问题——`.state` 随脚本位置分裂（`~/qd-appt-deploy` 与 `showcase/deploy` 各一份，后者显示「版本为空」、`rollback` 会报没有 previous）、`curl -sI ... \| head -1` 在代理下把 `HTTP/1.1 200 Connection established` 当成站点 200。`deployment-cicd-plan.md` 同步：命令行统一子命令式、公网探活改 `--noproxy` + 状态码、§7.6 补「执行入口唯一」、Q4 与 Phase 1–3 标已闭环 | 仅 docs 仓 |
+| 2026-10-30 | **任务调度中心提到二级 + seed 幂等审计**：线上侧栏缺该入口，根因是 `appt_s13_menu_showcase.sql` 用 `UPDATE` 兜底而线上库整行缺失（0 行静默通过、脚本不报错）；改为「先 `INSERT ... WHERE NOT EXISTS` 再 `UPDATE`」，归属由「运维对账」三级提到「挂号业务」二级（order 8）。`init-db.sh` 的 `BASE_FILES` 补 `s14_menu_pages` / `s2_menu_generate` / `s13_menu_showcase`——否则 `s1_menus` 的大删除会让开发机重跑默认模式丢 19 个三级页面与 120。实测：开发库 + 线上库各一次、「行已存在/行缺失」两条分支、临时库 `--full` 一次 + 默认模式重跑一次。同轮加固：`appt_s1_menus.sql` 清理段改递归删整棵子树（原版只删一层，F 按钮会成孤儿）、`appt_s0_cleanup.sql` 补清上游 `ry_vue` 自带的 15 行孤儿授权；连跑两轮后孤儿菜单/孤儿授权均为 0 | backend + docs |
 
 ---
 
@@ -558,3 +559,4 @@ PRD §13.1 末条「第 9 章全部非功能需求」是兜底条款，原 §13.
 | v0.7.8 | 2026-10-29 | **S16 拆分拍板**：按"是否需要服务器"拆为 **S16.1**（compose 去 `build:` / 统一部署入口 `deploy.sh` / 镜像首推 GHCR / wsl 发布链 / 备份与日志轮转——本机即可验收）与 **S16.2**（服务器 + 域名 + HTTPS + 反代 + 小程序合法域名 + 可选监控——阻塞于服务器）。§2 增两行、§3 拆两节并按归属重排原 5 条 checkbox（演示数据重置入口归 S16.2 并标注属应用功能）、§5/§8 同步、README 与 `test-evidence` §24 口径对齐；**两片均保持「未开始」，不预勾任何项** | 仅 docs 仓 |
 | v0.7.9 | 2026-10-30 | **S16.1 完成**：showcase 编排拆五件套（`compose.yml` / `compose.deps.yml` / `compose.wsl.yml` / `compose.cloud.yml` / `compose.build.yml`，删除跨仓 include 的旧文件）、`demo.sh` 改多 `-f`（行为不回退）、新增 `deploy.sh`（up/adopt/down/rollback/backup/restore/status + `.state` digest + 数据目录守卫）、新增 `release.yml`（dispatch 唯一入口，preflight 与部署均走自托管 runner）；backend `init-db.sh` 支持冒号分隔多编排。四枚镜像首推 GHCR `v0.1.0` 并冷拉验证；wsl 目标实跑发布 39s / 回滚 42s / 前滚 46s / 备份 1s / 恢复 62s，CI 发布 run #4 1m09s 全绿。**S16.2 仍未开始（等服务器）**。§3 六条 checkbox 全部勾选，实测数字见 `test-evidence.md` §25 | showcase + backend + docs |
 | v0.7.10 | 2026-10-30 | **部署方案文档纠偏 + 重启自启复验**：`deployment-cicd-plan.md` 命令行统一为子命令式（旧式 `deploy.sh wsl --tag` / `--rollback` 照敲会打印「未知子命令」并退出 2，共修 10 处）、公网探活从 `curl -sI ... \| head -1` 改为 `--noproxy '*' -w '%{http_code}'`（走代理时 CONNECT 行会被误判为 200）、§7.6 第 4 条补「执行入口唯一」（`.state` / `backup` 随脚本位置分裂，两个入口各自记忆）、Q4 与 Phase 1–3 同步为已闭环（GHCR 已首推 `v0.1.0`）；`test-evidence.md` 增 §26 记录整机重启后自启实测（7 容器、5 探针全绿、数据目录 266M） | 仅 docs 仓 |
+| v0.7.11 | 2026-10-30 | **菜单入口修正 + seed 幂等审计**：`appt_s13_menu_showcase.sql` 第 5 段由「纯 `UPDATE`」改为「`INSERT ... WHERE NOT EXISTS` + `UPDATE`」，并把「任务调度中心」（120）从「运维对账」三级提到「挂号业务」二级（order 8）；`init-db.sh` 的 `BASE_FILES` 补 `s14_menu_pages` / `s2_menu_generate` / `s13_menu_showcase`，修「开发机重跑默认模式会丢 19 个三级页面 + 120」。审计另记：`s2_oss_config` 的 `gen_table` UPDATE 在干净机空转（无业务影响）、`e5_client_access` 依赖框架种子（两库实测命中）、5 份开发期脚本不在两条链路。**同轮修复两处清理缺陷**：`appt_s1_menus.sql` 由「只删一层」改为**递归删整棵子树**（否则 F 型按钮成孤儿菜单、其授权变脏）、`appt_s0_cleanup.sql` 新增清全局孤儿授权（上游 `ry_vue` 种子有 15 行指向不存在的菜单）。实测见 `test-evidence.md` §27 | backend + docs |

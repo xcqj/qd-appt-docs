@@ -1412,3 +1412,62 @@ sj_job 3 条：demo-job / 每日放号（0 0 8 * * ?）/ apptPaymentCloseJob（*
 - 本轮只复验「容器 + 业务探活」，**公网与隧道未在本轮复测**，日常按 `deployment-cicd-plan.md` §9.6「日常运维五项」执行（属 S16.2 之前的运维动作）。
 - 开发态（8082 后端 / 8083 admin / 8084 H5）是宿主机进程，**不在自启范围**，需手工起；演示栈占用 18xxx，两者互不冲突。
 - `restart: unless-stopped` 对被**手动 `stop`** 过的容器不生效（Docker 语义）；本轮 22 个全部自启，说明此前无遗留 stop 状态。
+
+---
+
+## 27. 菜单入口归属修正与 seed 幂等审计（2026-10-30）
+
+> 定位：**缺陷修复**，不是切片。承接 §22 问题 5（当时把「任务调度中心」移到「运维对账」下，属三级）。
+> 触发：线上（18083）侧栏「运维对账」下只剩 5 项，缺「任务调度中心」；开发库（8083）却有。
+
+### 27.1 根因（三层各错一点）
+
+| 层 | 事实 |
+|---|---|
+| 数据 | 线上库 `sys_menu` 里 `menu_id=1761400000000000120` **整行不存在**（开发库存在，parent=2007） |
+| 脚本 | `appt_s13_menu_showcase.sql` 第 5 段当时只写 `UPDATE ... WHERE menu_id=120` → 影响 0 行**静默通过**，脚本不报错 |
+| 部署 | `--full` 新建库有该行（`ry_vue.sql` 插入 → s13 迁移），所以「新库正常」；线上那份是 §25.5 回切的历史库，该行被人工清理过 |
+
+结论：不是页面或反代坏了，是 seed 用 `UPDATE` 兜底、默认目标行必然存在。
+
+### 27.2 改动（1 个 SQL + 1 个部署脚本 + 两个库）
+
+| 对象 | 改动 |
+|---|---|
+| `backend/script/sql/appt_s13_menu_showcase.sql` | 第 5 段改「`INSERT ... WHERE NOT EXISTS` + `UPDATE`」；归属由 `运维对账(2007) order 9`（三级）提到 **`挂号业务(2001) order 8`**（二级），并纠正 `path`/`component`/`perms` 漂移 |
+| `backend/deploy/init-db.sh` | `BASE_FILES` 补 `appt_s14_menu_pages` / `appt_s2_menu_generate` / `appt_s13_menu_showcase`——`s1_menus` 清理时会删掉二级目录下的页面与按钮，缺这三份时开发机重跑一次默认模式就丢「19 个三级页面 + 任务调度中心」 |
+| `backend/script/sql/appt_s1_menus.sql` | 清理段改**递归删整棵子树**（原版只删 2001–2008 的**直接**子节点：三级页面被删、F 型按钮留下变孤儿，其授权也一起变脏） |
+| `backend/script/sql/appt_s0_cleanup.sql` | 补「清全局孤儿授权」：上游 `ry_vue.sql` 的 `sys_role_menu` 种子引用了不存在的菜单（`1761400000000011616` 段共 15 行），属框架自带脏数据 |
+| 两个库 | 开发库（`blog-mysql/appt`）、线上库（`qd-appt-demo-mysql/appt`）各执行一次 |
+
+### 27.3 实测
+
+| 场景 | 做法 | 结果 |
+|---|---|---|
+| 开发库改归属 | `UPDATE ... parent_id=2001, order_num=8` | 回读 8 项：7 个 M 目录 + 1 个 C 页面 |
+| 「行已存在」幂等 | 开发库整份重跑 s13 | 无重复插入，120 仍 `parent=2001 order=8` |
+| 「行缺失」自愈 | 线上库整份执行 s13 | 补插成功，回读 `parent=2001 order=8` |
+| 干净机全量 | `DB_NAME=appt_fullcheck` + `init-db.sh --full` | 排班 500 / 号源 9000 / 挂号 2000 / 支付 2000 / 账号 5；2001 下恰 8 项，120 无 2007 残留 |
+| 开发机重跑 | 同一临时库再跑默认模式（`init-db.sh`） | 三级页面 **82 行**（19 C + 63 F）保留、`appt:schedule:add` 按钮 1 行、120 仍在二级 |
+| 其余受检项 | `sys_oss_config` / `sys_client` | minio `status=Y`；app 客户端 `access_path` 四段齐全 |
+| 孤儿数据 | 临时库连跑 `--full` + 默认模式两轮后查 | 孤儿菜单 **0**、孤儿授权 **0**（修前：`s1_menus` 留下一层 F 按钮孤儿；上游种子另有 15 行孤儿授权） |
+
+临时库 `appt_fullcheck` 验完即删，未触碰 `appt` 库。
+
+### 27.4 其余 seed 的审计结论
+
+| 脚本 / 语句 | 风险 | 结论 |
+|---|---|---|
+| `appt_s13_menu_showcase.sql` 第 1–4 段 | `UPDATE` 依赖行存在 | 依赖 `ry_vue.sql` 固定的顶级菜单与 3 个演示账号，两库实测均命中；本轮未改 |
+| `appt_s2_oss_config.sql` 的 `gen_table_column` UPDATE | 依赖 `gen_table` 有数据 | `appt_s1_gen_config.sql` 不在 `--full` 链路 → 干净机上必然 0 行空转；只影响代码生成器页（「系统工具」已被 s13 隐藏），**无业务影响**。附：该文件同一段 UPDATE+SELECT 重复两遍（可清） |
+| `appt_e5_client_access.sql` | `UPDATE` 依赖 `client_key='app'` | `ry_vue.sql` 固定插入；两库实测都是 `/appt/**,/auth/**,/system/**,/resource/**` |
+| `appt_s1_menus.sql` | 删除只覆盖一层，且不清子树授权 | **已修**：改递归 CTE 删整棵子树，并在删菜单前先清子树内的 `sys_role_menu`（实测连跑两轮后孤儿菜单、孤儿授权均为 0） |
+| `ry_vue.sql` 的 `sys_role_menu` 种子 | 引用不存在的菜单（`1761400000000011616` 段 15 行） | 上游自带脏数据，功能上不影响（超管旁路），但角色授权树会出现幽灵勾选 → 由 `appt_s0_cleanup.sql` 新增的「清全局孤儿授权」处理 |
+| `appt_s2_menu_cleanup` / `s2_menu_order` / `s2_gen_column_fix` / `s1_gen_config` / `s3_patient_seed` | 不在任何清单 | 开发期一次性脚本，按需手工执行，不属两条链路 |
+
+### 27.5 边界
+
+- 未改前端、未改 nginx 反代，`/snail-job/` 链路不变；
+- 线上生效需**退出重登**（`getRouters` 在登录/路由守卫时拉取）；
+- 该页仍是 iframe，SnailJob 服务端未起时 502 属预期；
+- 层级变更只影响侧栏观感与面包屑，`monitor:snailjob:list` 权限位数不变。
