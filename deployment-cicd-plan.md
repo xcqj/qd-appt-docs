@@ -2,7 +2,7 @@
 
 > **性质**：方案文档，**只写「怎么做」**。切片做什么、做到哪、什么算完成，一律以 `ROADMAP.md` 为准——**本文不记进度、不打勾选框**（2026-10-29 定）。
 > **范围**：主线只覆盖 **qd-appt**；sd-blog 见 **附录 C**（2026-10-29 定：两项目目录结构不同，不并行做）。
-> **生成日期**：2026-10-29 ｜ **最近更新**：2026-10-29 第二轮（补入实机联调结论 §2.7 / 踩坑 §2.8 / 隧道实操 §9.6 / 新增风险 R15–R18）
+> **生成日期**：2026-10-29 ｜ **最近更新**：2026-10-30（对齐 S16.1 落地：命令行统一子命令式 / 公网探活改状态码 / GHCR 已首推 / 部署入口唯一）
 > **核查基线**（各仓 `git log --oneline -1`，均为本次实测）：
 > `qd-appt-backend` d2d98ab · `qd-appt-admin` 03b0399 · `qd-appt-app` 6e719f3 · `qd-appt-showcase` 4de6291 · `qd-appt-docs` f2d4cfc ·
 > `ryblogs` e9769c963 · `ryblogs-ui` b6bea12 · `blogs-web` 76a016f
@@ -24,7 +24,7 @@
 | 云服务器部署 | **GitHub-hosted Runner + SSH**（服务器不装 Runner），远端执行同一份 `deploy.sh` |
 | 外部访问 | **WSL 场景已于 2026-10-29 实跑通过**：Cloudflare **Named Tunnel** + 自有域名（需域名托管到 Cloudflare）。Quick Tunnel 仍可临时演示，但官方明确**不支持 SSE**；云服务器场景推荐 **Caddy 自动 HTTPS** |
 | 已完成（2026-10-29 手工，非流水线） | 域名接入 Cloudflare → 隧道 systemd 常驻 → 两域名指向容器（`admin`→18083 / `demo`→18084）→ HTTPS + 验证码 + RSA/AES 登录 → 下单/支付/站内信 → SSE 通道。**细节与踩坑见 §2.7 / §2.8** |
-| 现在必须做 | ① qd-appt 的 compose 去 `build:`（拆 base/deps/target 覆盖；**不做这步，"拉同一镜像部署"就是假的**）② 统一 `deploy.sh` + `.state` 回滚 ③ **GHCR 首推**（Q4 至今未推，当前跑的都是本地构建镜像）④ tag 规范 `vX.Y.Z` |
+| 已闭环（S16.1，2026-10-30） | ① qd-appt 的 compose 去 `build:`（拆 base/deps/target 覆盖；不做这步，"拉同一镜像部署"就是假的）② 统一 `deploy.sh` + `.state` 回滚 ③ **GHCR 首推 `v0.1.0`**（四枚，冷拉验证见 §2.6 Q4）④ tag 规范 `vX.Y.Z`。实测数字见 `test-evidence.md` §25 |
 | 可以延后 | sd-blog 全套（附录 C）、Trivy/SonarQube、Prometheus、ES 索引备份、Runner ephemeral 化、多环境（staging） |
 
 ---
@@ -150,7 +150,7 @@
 | **Q1** | 仓库可见性与 GitHub 计划 | ✅ 已答复 | 个人账号 **Free**、8 仓当前 **private**，面试期改 **public**。影响：private 期间 Actions 走 $12/月额度（≈2000 Linux 分钟，够用）；**Environment 保护规则现在不可用、改 public 后可用**；GHCR 包首推默认 private。改 public 前要过的 6 项检查见 §2.9 |
 | **Q2** | 域名与备案 | ✅ 部分答复 | 已有免费域名 `qdappt.us.ci`（DNSHE 免费二级域名，到期 **2027-10-29**，需提前续期），NS 已托管到 Cloudflare 且 **Active**。云服务器与备案仍未定（归 `cloud` 目标） |
 | **Q3** | 云服务器 | ⬜ 未定 | 仍无服务器。**当前唯一部署目标是本机 WSL2**（主机 32G / WSL 16G，跑单项目全栈有余）。`cloud` 目标只保留结构，验收等服务器到位 |
-| **Q4** | GHCR 是否推过 | ✅ 已答复 | **从未推送**（S14 只验证过 `docker build` / `docker run`）。当前演示栈跑的全是**本地构建镜像** → 首次真推是 Phase 2 的验收项 |
+| **Q4** | GHCR 是否推过 | ✅ 已闭环 | **已推送**：2026-10-30 的 S16.1 首推四枚 `ghcr.io/xcqj/appt-{api,admin,h5,snailjob}:v0.1.0`，本机 `docker manifest inspect` 四枚全命中、`pull` 后 `up` 成功（冷启动演练见 `test-evidence.md` §25.5）。此前 S14 只验证过本地 `docker build` / `docker run` |
 | **Q5** | WSL 常驻性 | ✅ 已答复 | WSL 长期开机；`systemctl is-enabled docker cloudflared` 均 **enabled**（2026-10-29 实测）。Windows 睡眠期间仍会中断——这是"演示目标"的固有属性，不承诺 SLA |
 | **Q6** | 小程序 appid 配置 | ⬜ 未定 | 仍写在 `app/src/manifest.json`（工作区有未提交改动）。小程序出包不在本轮范围 |
 | **Q7** | sd-blog `cloud-deployment.md` 缺失 | ⬜ 未定 | ROADMAP D37 引用的该文件仍不存在；归 sd-blog 后续会话处理 |
@@ -409,7 +409,7 @@ flowchart TB
 |---|---|---|---|---|
 | 1 | `preflight` | ubuntu-latest | ①`docker manifest inspect` 校验 `appt-api/appt-admin/appt-h5/appt-snailjob:${TAG}` 四枚都存在 ②若 `deploy_target=wsl`，`gh api` 查该仓是否有在线 self-hosted runner（避免排队 24h） ③校验 `${TAG}` 是 semver（拒绝 `latest`） | 直接失败，不进入部署 |
 | 2 | `deploy-wsl`（`if: target=='wsl'`） | `[self-hosted,linux,x64,wsl]` | ①`rsync deploy/ → ~/qd-appt-deploy` ②`docker login ghcr`（pull-only） ③`cp .state/current .state/previous` ④`docker compose pull` ⑤`up -d --wait --wait-timeout 300` ⑥探活 ⑦写 `.state/current` | 探活失败 → `TAG=$(.state/previous)` 重新 `up -d --wait` → job fail |
-| 3 | `deploy-cloud`（`if: target=='cloud'`） | ubuntu-latest | ①写 `~/.ssh/id_ed25519`（600）+ `known_hosts` ②`rsync` 同步 deploy/ ③`ssh deploy@host '/srv/qd-appt/deploy.sh cloud --tag ...'`（远端做 ④–⑦） | 远端脚本非 0 退出 → GitHub job fail；远端已回滚 |
+| 3 | `deploy-cloud`（`if: target=='cloud'`） | ubuntu-latest | ①写 `~/.ssh/id_ed25519`（600）+ `known_hosts` ②`rsync` 同步 deploy/ ③`ssh deploy@host 'cd /srv/qd-appt && ./deploy.sh cloud up --tag ...'`（远端做 ④–⑦） | 远端脚本非 0 退出 → GitHub job fail；远端已回滚 |
 | 4 | `notify` | ubuntu-latest | 汇总当前/上一版本、探活结果、耗时 | 仅记录 |
 
 **sd-blog 发布链**（3 镜像，3 仓打同一个 tag）——结构相同，`preflight` 校验 `sd-backend/sd-web/sd-admin`，探活用 `backend /` + `admin /healthz` + `web /`。**该链归附录 C，本轮不做**，此处只保证两份设计可以同构套用。
@@ -575,7 +575,7 @@ done
 1. **开发 8xxx，演示 18xxx**；隧道里只填 18xxx。演示态若被非本项目进程占用，`demo.sh` 按 `+10000` 避让；**写进 `.env` 的端口被占则直接报错**（不静默漂移，漂了隧道就失效）。
 2. 演示端口必须显式写进 `showcase/deploy/.env` 与部署目录的 `.env`。
 3. Compose 项目名与容器名前缀保持一致（`COMPOSE_PROJECT_NAME` ↔ `APPT_CONTAINER_PREFIX`）：演示 `qd-appt-demo` / 云 `qd-appt-prod`。**不写 `container_name` 固定值**，否则两个目标会互撞。
-4. **运行目录与数据目录要分离且唯一**：`showcase/deploy/` 只放源码；CI 用 `rsync` 同步到 `~/qd-appt-deploy/` 但**不覆盖** `.env`、`.state`；数据目录用**绝对路径**（`APPT_DATA_DIR=/home/user01/qd-appt-data`）。相对路径会按各自的 compose 文件位置解析，`demo.sh` 与 `deploy.sh` 就落到两个不同目录——实测直接起出空库、api 缺表 crash loop。
+4. **运行目录、数据目录、执行入口三者都要唯一**：`showcase/deploy/` 只放源码；CI 用 `rsync` 同步到 `~/qd-appt-deploy/` 但**不覆盖** `.env`、`.state`；数据目录用**绝对路径**（`APPT_DATA_DIR=/home/user01/qd-appt-data`）。相对路径会按各自的 compose 文件位置解析，`demo.sh` 与 `deploy.sh` 就落到两个不同目录——实测直接起出空库、api 缺表 crash loop。**执行入口同理**：`deploy.sh` 的 `STATE_DIR="$DEPLOY_DIR/.state"` 与 `BACKUP_DIR="$ROOT_DIR/backup"` 都相对脚本自身位置，在 `showcase/deploy` 与 `~/qd-appt-deploy` 各跑一次就是**两份部署记忆、两处备份**——在 A 入口发布过的栈，到 B 入口 `status` 显示「当前版本：空」，`rollback` 直接报「没有 .state/previous」（2026-10-30 重启后实测）。**固定只用一个入口：`~/qd-appt-deploy`**（`release.yml` 第 114 行就在那里执行），`showcase/deploy` 只当源码与首次同步来源。
 
 ---
 
@@ -662,7 +662,7 @@ jobs:
 
       - name: 部署（远端逻辑与本地一致）
         working-directory: ~/qd-appt-deploy
-        run: ./deploy.sh wsl --tag "$TAG" ${{ inputs.skip_pull && '--no-pull' || '' }}
+        run: ./deploy.sh wsl up --tag "$TAG" ${{ inputs.skip_pull && '--no-pull' || '' }}
 
   deploy-cloud:
     needs: preflight
@@ -689,7 +689,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes \
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-            "cd /srv/qd-appt && ./deploy.sh cloud --tag '$TAG'"
+            "cd /srv/qd-appt && ./deploy.sh cloud up --tag '$TAG'"
 ```
 
 ### 8.2 sd-blog：`ryblogs/.github/workflows/release.yml`（归附录 C，本轮不做）
@@ -762,19 +762,20 @@ jobs:
 set -Eeuo pipefail
 
 TARGET="${1:-}"; shift || true
-case "$TARGET" in wsl|cloud) ;; *) echo "用法: ./deploy.sh <wsl|cloud> [--tag vX.Y.Z] [--no-pull] [--rollback]"; exit 2 ;; esac
+case "$TARGET" in wsl|cloud) ;; *) echo "用法: ./deploy.sh <wsl|cloud> <up|adopt|rollback|status|backup|restore|down|logs> [--tag vX.Y.Z] [--no-pull]"; exit 2 ;; esac
+CMD="${1:-status}"; shift || true                 # 子命令缺席时等同 status
 
 # 1. 读 .env.<target>（唯一配置来源）+ .state/current|previous
-# 2. 若 --rollback：TAG=<previous>
-# 3. cp .state/current .state/previous（仅前滚时）
-# 4. docker compose -f compose.yml -f compose.deps.yml -f compose.$TARGET.yml pull
+# 2. rollback 子命令：TAG=<previous>
+# 3. up：先把 .state/current 落盘为 .state/previous，再前滚
+# 4. docker compose -f compose.yml -f compose.deps.yml -f compose.$TARGET.yml pull（--no-pull 跳过）
 # 5. docker compose ... up -d --wait --wait-timeout 300
 # 6. 探活：qd-appt → curl .../appt/public/campus/list | grep '"code":200'
 #          sd-blog → backend /, admin /healthz, web /
-# 7. 失败 → 自动 --rollback 一次（只回滚一次，不做循环重试）→ 退出码 1
+# 7. 失败 → 自动 rollback 一次（只回滚一次，不做循环重试）→ 退出码 1
 # 8. 成功 → 写 .state/current（tag + 镜像 digest + 时间）
 ```
-**为什么把逻辑放在脚本而不是 workflow 里**：wsl 与 cloud 走**同一份脚本**，本地手工、CI 自动都调用它——这是"两个目标只有配置差异"的物理保证。
+**为什么把逻辑放在脚本而不是 workflow 里**：wsl 与 cloud 走**同一份脚本**，本地手工、CI 自动都调用它——这是"两个目标只有配置差异"的物理保证。**注意命令行形状**：目标是第一个位置参数，动作是**第二个位置的子命令**（`up` / `adopt` / `rollback` / `status` / `backup` / `restore` / `down` / `logs`），不接受 `--rollback` 这种旧式开关；照旧式敲会打印「未知子命令」并 `exit 2`。权威实现见 `showcase/deploy/deploy.sh`。
 
 ---
 
@@ -818,7 +819,15 @@ mkdir -p ~/actions-runner && cd ~/actions-runner
 sudo ./svc.sh install && sudo ./svc.sh start     # WSL 有 systemd 时
 
 # ② 手工先跑一次（不依赖 CI，先证明脚本对）
-cd ~/projects/qd-appt/showcase && ./deploy/deploy.sh wsl --tag v0.1.0
+#    ⚠️ 在**部署目录**执行，与 CI 同一入口：.state 与 backup 都相对脚本自身位置（§7.6 第 4 条）
+#    [首次] 先把 deploy/ 同步过去，且不覆盖 .env 与 .state
+rsync -a --exclude '.env' --exclude '.env.*' --exclude '.state' \
+      ~/projects/qd-appt/showcase/deploy/ ~/qd-appt-deploy/
+#    ⚠️ 首次还必须让部署目录里有 .env（rsync 刻意排除了它）：缺 .env 时
+#       APPT_DATA_DIR 回落默认相对路径 ../data → ~/data，会起出"有库无表"的空库
+#       （§25.3 第 2 条的真问题）。把 showcase/deploy/.env 拷过去，其中务必有绝对路径：
+#       APPT_DATA_DIR=/home/user01/qd-appt-data
+cd ~/qd-appt-deploy && ./deploy.sh wsl up --tag v0.1.0
 
 # ③ 再走 dispatch：deploy_target=wsl
 ```
@@ -837,9 +846,9 @@ cd ~/projects/qd-appt/showcase && ./deploy/deploy.sh wsl --tag v0.1.0
 
 ```bash
 # 一键（推荐，脚本会写回 .state）
-ssh deploy@<host> 'cd /srv/qd-appt && ./deploy.sh cloud --rollback'
+ssh deploy@<host> 'cd /srv/qd-appt && ./deploy.sh cloud rollback'
 # 或指定某个历史版本（tag 不可变，永远拉得到）
-ssh deploy@<host> 'cd /srv/qd-appt && ./deploy.sh cloud --tag v0.0.9'
+ssh deploy@<host> 'cd /srv/qd-appt && ./deploy.sh cloud up --tag v0.0.9'
 ```
 **回滚前必读**：§5.4 + R1。若本次发布含 DDL，先判断旧镜像能否在**新 schema** 上运行（加列一般可以；删列/改类型不行）。
 
@@ -857,7 +866,7 @@ scp /tmp/*.gz deploy@<new>:/tmp/
 ssh deploy@<new> 'cd /srv/qd-appt && docker compose up -d mysql redis minio'
 ssh deploy@<new> 'zcat /tmp/appt-*.sql.gz | docker exec -i qd-appt-mysql mysql -uroot -p"$PASS" appt'
 ssh deploy@<new> 'tar xzf /tmp/minio-*.tgz -C /srv/qd-appt/data'
-ssh deploy@<new> 'cd /srv/qd-appt && ./deploy.sh cloud --tag v0.1.0'
+ssh deploy@<new> 'cd /srv/qd-appt && ./deploy.sh cloud up --tag v0.1.0'
 ```
 **迁移检查清单**：① 数据库（dump + 恢复后核对 20 张表行数）② MinIO bucket `appt`（头像/封面）③ Redis AOF（序列号/占位，丢了会导致单号跳号但不影响正确性，仍建议搬）④ `sys_oss_config` 里的 **OSS 公网域名**（换域名必须改表，不是改 env）⑤ Caddy/Tunnel 配置与 DNS ⑥ `.env` 里的密钥（**不要走聊天工具传**）。
 
@@ -895,10 +904,12 @@ sudo journalctl -u cloudflared -n 40 --no-pager | grep "Registered tunnel connec
 #    demo.qdappt.us.ci  → HTTP → localhost:18084
 #    CNAME 由平台自动生成（<隧道ID>.cfargotunnel.com，橙云），不要手加 A 记录
 
-# ⑦ 验证
-curl -sI https://admin.qdappt.us.ci/ | head -1
-curl -sI https://demo.qdappt.us.ci/  | head -1
-curl -s  https://demo.qdappt.us.ci/dev-api/appt/public/campus/list | head -c 200   # 期望 code:200
+# ⑦ 验证（判定看状态码，不看响应行）
+#    ⚠️ 有 https_proxy 时 `curl -sI ... | head -1` 的首行是代理的
+#       `HTTP/1.1 200 Connection established`，真实状态行被挤到第二行 → 会把 502/530 误判成通
+curl -sS --noproxy '*' -o /dev/null -w 'admin %{http_code}\n' https://admin.qdappt.us.ci/
+curl -sS --noproxy '*' -o /dev/null -w 'demo  %{http_code}\n' https://demo.qdappt.us.ci/
+curl -sS --noproxy '*' https://demo.qdappt.us.ci/dev-api/appt/public/campus/list | head -c 200   # 期望 "code":200
 ```
 
 **故障对照（都实际遇到过）**
@@ -910,18 +921,33 @@ curl -s  https://demo.qdappt.us.ci/dev-api/appt/public/campus/list | head -c 200
 | Cloudflare `404` | hostname 无路由（或同名重复） | 检查列表是否恰好两条、主机名是否正确 |
 | `502` | 隧道通，源站端口没人 | `docker ps` 看容器是否起来、端口是否一致 |
 | Vite `Blocked request … allowedHosts` | 指到了 `pnpm dev` 而不是容器 | 改 Service 到 18xxx |
+| 首行 `HTTP/1.1 200 Connection established` | 走 HTTP 代理时 curl 的 CONNECT 握手行，**不是站点状态** | 用 `--noproxy '*'` + `-w '%{http_code}'`（见 ⑦） |
 
-**日常运维两条**
+**日常运维（睡眠/重启后的自检，按顺序五项）**
 
 ```bash
-# 睡眠/重启后自检（隧道自启、容器不一定）
-docker ps --format '{{.Names}}' | sort
-curl -sI https://admin.qdappt.us.ci/ | head -1     # 502 = 容器没起，`cd showcase && ./demo.sh`
+# ① 容器：qd-appt 相关应全在，api/admin/h5/mysql/redis/snailjob 带 (healthy)
+docker ps -a --filter 'name=qd-appt' --format '{{.Names}}\t{{.Status}}'
+#    出现 Exited 说明没自启（restart: unless-stopped 对被手动 stop 过的容器不生效）
+
+# ② 业务探活：五项全绿才算可用（容器 Up ≠ 能挂号）
+cd ~/qd-appt-deploy && ./deploy.sh wsl status
+
+# ③ 隧道：容器全绿但这里 inactive 时，公网仍不可达
+systemctl is-enabled cloudflared; systemctl is-active cloudflared
+
+# ④ 公网：判状态码，不判响应首行
+curl -sS --noproxy '*' -o /dev/null -w '%{http_code}\n' https://admin.qdappt.us.ci/   # 200 / 502 / 530
+
+# ⑤ 部署记录：从哪个目录跑，就只能看到哪个目录的 .state（§7.6 第 4 条）
+cd ~/qd-appt-deploy && ./deploy.sh wsl status 2>&1 | grep -E '当前版本|上一版本'
 
 # 临时对外关闭（演示结束后务必执行其一）
 sudo systemctl stop cloudflared
 # 或直接用 Cloudflare Access 把 admin 域名限制成指定邮箱
 ```
+
+> 判读顺序：③ `inactive` → 全站 530；② 有探针红 → 通常 502（先看容器）；② 全绿而 ④ 非 200 → 查 Public Hostname 指向的端口（应是 18083/18084，不是 8083/8084）。⑤ 的「当前版本」为空**不代表栈坏了**，只说明这个目录没有发布记录——发布与回滚必须统一在部署目录里做（§7.6 第 4 条）。
 
 ---
 
@@ -982,14 +1008,15 @@ sudo systemctl stop cloudflared
 ### 10.5 验收标准（可执行）
 
 ```bash
-# ── A. wsl 目标（当前唯一可验收的目标，2026-10-29 已实跑通过）──
-docker ps --format '{{.Names}}\t{{.Status}}\t{{.Ports}}' | grep qd-appt-demo   # 7 个容器
-curl -sI https://admin.qdappt.us.ci/ | head -1                                  # 200
-curl -sI https://demo.qdappt.us.ci/  | head -1                                  # 200
-curl -s  https://demo.qdappt.us.ci/dev-api/appt/public/campus/list  | grep -q '"code":200'
-curl -s  https://admin.qdappt.us.ci/prod-api/appt/public/campus/list | grep -q '"code":200'
+# ── A. wsl 目标（当前唯一可验收的目标；2026-10-30 S16.1 验收通过）──
+cd ~/qd-appt-deploy && ./deploy.sh wsl status                                   # 7 容器 + 5 探针全绿
+systemctl is-active cloudflared                                                 # active
+curl -sS --noproxy '*' -o /dev/null -w '%{http_code}\n' https://admin.qdappt.us.ci/   # 200
+curl -sS --noproxy '*' -o /dev/null -w '%{http_code}\n' https://demo.qdappt.us.ci/    # 200
+curl -sS --noproxy '*' https://demo.qdappt.us.ci/dev-api/appt/public/campus/list  | grep -q '"code":200'
+curl -sS --noproxy '*' https://admin.qdappt.us.ci/prod-api/appt/public/campus/list | grep -q '"code":200'
 # 人工：登录页出现算术验证码 → admin/admin123 登录 → 下单 → 支付 → 站内信两条
-# 回滚演练：./deploy.sh wsl --rollback → 上述探针全绿 → 再前滚
+# 回滚演练：./deploy.sh wsl rollback → 上述探针全绿 → 再前滚
 
 # ── B. cloud 目标（等服务器到位后验收，条目先列着）──
 docker compose -f compose.yml -f compose.cloud.yml ps --format '{{.Name}}\t{{.State}}\t{{.Health}}'
@@ -1007,9 +1034,9 @@ nmap -p- <host>                                # 只应看到 22/80/443
 | Phase | 输入 | 产物 | 通过标准 | 预计 |
 |---|---|---|---|---|
 | **0 现状核查** | 8 个仓源码 + 一轮实机联调 | 本文档 §2（含 §2.7 已验证事实 / §2.8 踩坑） | §2 每条都有文件出处；Q1–Q9 有结论（现剩 Q3/Q6/Q7/Q8 未定，均不阻塞） | **已完成 2026-10-29** |
-| **1 compose 去 build** | `showcase/deploy/docker-compose.yml`、`backend/deploy/docker-compose.yml` | `compose.yml`（纯镜像）+ `compose.deps.yml` + `compose.wsl.yml` + `compose.cloud.yml` + `compose.build.yml` + `deploy.sh` + `.env.example` | `docker compose config` 里**没有 `build:`**；`./deploy.sh wsl --tag` 一次起全栈且探活全绿；`demo.sh` 仍可用（改为引用新文件）；端口按 §7.6 钉死在 `.env` | 1–2 天 |
-| **2 CI 补齐 + GHCR 首推** | 现有 4 个 qd-appt workflow | 后端 CI 保持、admin/app CI 不动；补 `release-tag.sh`；**打第一个 `v0.1.0` 让四枚镜像真推到 GHCR** | 四枚镜像能 `docker manifest inspect` 到；本机 `docker rmi` 后能从 GHCR 拉回并跑起来 | 0.5–1 天 |
-| **3 WSL 部署闭环** | Phase 1+2 | `release.yml`（`deploy_target=wsl`）+ 仓库级 runner + `.state` 回滚 | `workflow_dispatch` 选 wsl → job 绿 → 探针全绿 → `--rollback` 演练成功 → 再前滚 | 0.5 天 |
+| **1 compose 去 build** | `showcase/deploy/docker-compose.yml`、`backend/deploy/docker-compose.yml` | `compose.yml`（纯镜像）+ `compose.deps.yml` + `compose.wsl.yml` + `compose.cloud.yml` + `compose.build.yml` + `deploy.sh` + `.env.example` | `docker compose config` 里**没有 `build:`**；`./deploy.sh wsl up --tag` 一次起全栈且探活全绿（2026-10-30 已通过）；`demo.sh` 仍可用（改为引用新文件）；端口按 §7.6 钉死在 `.env` | **已完成 2026-10-30**（原估 1–2 天） |
+| **2 CI 补齐 + GHCR 首推** | 现有 4 个 qd-appt workflow | 后端 CI 保持、admin/app CI 不动；补 `release-tag.sh`；**打第一个 `v0.1.0` 让四枚镜像真推到 GHCR** | 四枚镜像能 `docker manifest inspect` 到；本机 `docker rmi` 后能从 GHCR 拉回并跑起来（冷启动演练见 `test-evidence.md` §25.5） | **已完成 2026-10-30**（原估 0.5–1 天） |
+| **3 WSL 部署闭环** | Phase 1+2 | `release.yml`（`deploy_target=wsl`）+ 仓库级 runner + `.state` 回滚 | `workflow_dispatch` 选 wsl → job 绿 → 探针全绿 → `rollback` 演练成功 → 再前滚 | **已完成 2026-10-30**（原估 0.5 天） |
 | **4 cloud 部署（预留）** | Phase 1+2 + 服务器 | `release.yml`（cloud 分支）+ 服务器初始化脚本 + Secrets | 结构在 Phase 1 已留好；验收等服务器：`nmap` 只暴露 22/80/443、Caddy 证书自动签发 | 1 天（+采购/备案） |
 | **5 加固** | Phase 3 | 备份 cron + 恢复脚本 + 日志轮转 + （可选）Trivy | 备份恢复演练成功；日志不撑爆磁盘；公网暴露面按 §10.4 收敛 | 1 天 |
 
@@ -1023,9 +1050,9 @@ nmap -p- <host>                                # 只应看到 22/80/443
 |---|---|
 | **推荐选型** | GitHub + GitHub Actions + Maven/pnpm + Buildx + **GHCR** + Docker Compose + （cloud）SSH + （wsl）仓库级 Self-hosted Runner + （ingress）Caddy / Cloudflare Tunnel |
 | **目标切换方法** | 唯一来源 `deploy_target ∈ {wsl, cloud}`：CI 用 `workflow_dispatch` 下拉，本地用 `./deploy.sh <target>`；它只决定 runner / 目录 / `.env` / ingress，**不改镜像、不改 compose 服务定义** |
-| **现在必须做** | ① qd-appt compose 去 `build:`（拆 base/deps/target 覆盖）② 统一 `deploy.sh` + `.state` 回滚 ③ **GHCR 首推**（至今零推送）④ tag 规范 `vX.Y.Z` + 禁止 latest ⑤ 端口按 §7.6 钉进 `.env` |
+| **已闭环（S16.1，2026-10-30）** | ① qd-appt compose 去 `build:`（拆 base/deps/target 覆盖）② 统一 `deploy.sh` + `.state` 回滚 ③ **GHCR 首推 `v0.1.0`**（四枚，冷拉已验证）④ tag 规范 `vX.Y.Z` + 禁止 latest ⑤ 端口按 §7.6 钉进 `.env` |
 | **可以延后** | sd-blog 全套（附录 C）、Trivy/Sonar、Prometheus、Runner ephemeral 化、镜像保留清理、ES 索引备份、staging 环境、小程序 CI 出包、SSE 心跳调优（§2.8 第 9 条，已决定先记录不修） |
-| **已经没有疑问的** | Q1（Free + private→public）、Q2（DNSHE 免费域名已接入）、Q4（GHCR 零推送）、Q5（WSL 常驻、开机自启 enabled）、Q9（Named Tunnel 下 SSE 通道可用） |
+| **已经没有疑问的** | Q1（Free + private→public）、Q2（DNSHE 免费域名已接入）、Q4（GHCR 已首推 `v0.1.0`）、Q5（WSL 常驻、开机自启 enabled）、Q9（Named Tunnel 下 SSE 通道可用） |
 | **剩下的不确定性** | Q3（没有云服务器，`cloud` 只留结构）、Q6（小程序 appid）、Q7（sd-blog 缺 cloud-deployment.md）、Q8（open-design 是否纳入）——**四条都不阻塞 Phase 1–3** |
 
 ---

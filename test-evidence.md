@@ -1275,7 +1275,7 @@ sj_job 3 条：demo-job / 每日放号（0 0 8 * * ?）/ apptPaymentCloseJob（*
 
 ## 24. 部署方案与 wsl 公网联调（S16.1 预研，2026-10-29）
 
-> 定位：**不是切片验收**。S16.1 在 ROADMAP §2 仍是「未开始」；本节记录的是"部署形态的可行性已被证明"以及为此付出的调试成本。镜像仍为本地构建，**GHCR 零推送**，没有任何部署流水线。
+> 定位：**不是切片验收**。S16.1 当时在 ROADMAP §2 仍是「未开始」；本节记录的是"部署形态的可行性已被证明"以及为此付出的调试成本。当时的镜像仍为本地构建、**GHCR 零推送**、没有任何部署流水线。**后续（2026-10-30）**：S16.1 已完成，四枚镜像改由 GHCR 提供，实测见 §25。
 
 ### 24.1 环境与基线
 
@@ -1380,3 +1380,35 @@ sj_job 3 条：demo-job / 每日放号（0 0 8 * * ?）/ apptPaymentCloseJob（*
 - 公网 `admin` / `demo` 两域名在冷启动期间与回切后均返回 **200**。
 - 结论：「只装 Docker 即可起全栈」在五件套改造后**仍然成立**，`demo.sh` 未因 S16.1 的编排拆分而退化。
 - 顺带修掉一处误导：`demo.sh down` 曾固定打印 `showcase/data`，而真实目录由 `APPT_DATA_DIR` 决定（提交 `f67f16a`）。
+
+---
+
+## 26. 整机重启后的自启复验（2026-10-30）
+
+> 定位：**运维观察，不是切片验收**。S16.1 已在 §25 验收；本节只回答「Windows 重启后这套栈还在不在、算不算好、怎么最快确认」。
+> 触发：OS 重启后第一次自检（`docker ps` 22 个容器，其中本项目 8 个）。
+
+### 26.1 实测
+
+| 环节 | 命令 | 结果 |
+|---|---|---|
+| 容器自启 | `docker ps --format '{{.Names}}' \| sort` | 22 个 running；qd-appt 相关 8 个 = 演示栈 7 + 开发态 `qd-appt-redis` |
+| 容器状态 | `./deploy.sh wsl status` | 7 个全 `Up 3 minutes`（`CREATED 17 hours ago`，**容器未重建**，只是被 Docker 拉起）；admin/api/h5/mysql/redis/snailjob 均 `(healthy)`，minio 无 healthcheck 属正常 |
+| 业务探活 | 同上 | 五项全绿：api 直连 / admin 首页 / api 经 admin 反代 / h5 首页 / api 经 h5 反代 |
+| 数据目录 | 同上 | `/home/user01/qd-appt-data`，**266M**（`APPT_DATA_DIR` 绝对路径生效，未起空库） |
+| 部署记录 | 同上 | **「当前版本 / 上一版本」均为空**（见 26.2 第 1 条） |
+
+### 26.2 两个真问题（本轮暴露）
+
+| # | 现象 | 根因 | 处置 |
+|---|---|---|---|
+| 1 | 栈在 §25.2 走过 `up` 并写入 `.state/current`，但从 `showcase/deploy` 跑 `status` 显示版本为空，`rollback` 会报「没有 .state/previous」 | `STATE_DIR="$DEPLOY_DIR/.state"`、`BACKUP_DIR="$ROOT_DIR/backup"` 都相对脚本自身位置：发布发生在 `~/qd-appt-deploy`（`release.yml` 第 114 行），查询发生在 `showcase/deploy`，**两处各一份记忆** | `deployment-cicd-plan.md` §7.6 第 4 条补「执行入口唯一」：固定用 `~/qd-appt-deploy`，`showcase/deploy` 只当源码与首次同步来源 |
+| 2 | `curl -sI https://admin.qdappt.us.ci/ \| head -1` 输出 `HTTP/1.1 200 Connection established`，看着像站点 200 | 本机走 HTTP 代理，这一行是 curl 的 CONNECT 握手响应，真实状态行被 `head -1` 挤掉；**该行只证明代理通，不证明站点通** | `deployment-cicd-plan.md` §9.6 ⑦ 与 §10.5 A 段改为 `curl -sS --noproxy '*' -o /dev/null -w '%{http_code}'`；§9.6 故障对照表补该现象 |
+
+### 26.3 结论与边界
+
+- **自启链路成立**：`docker.service` + 各服务 `restart: unless-stopped` 使 7 个容器在重启后自动恢复，业务探活五项全绿，无需人工干预。
+- **"容器在跑"不等于"部署记录在"**：`.state` 是发布记帐，不参与容器启动；缺它时栈可用，但 `rollback` 无落点——所以自检要看两样（容器 + `.state`）。
+- 本轮只复验「容器 + 业务探活」，**公网与隧道未在本轮复测**，日常按 `deployment-cicd-plan.md` §9.6「日常运维五项」执行（属 S16.2 之前的运维动作）。
+- 开发态（8082 后端 / 8083 admin / 8084 H5）是宿主机进程，**不在自启范围**，需手工起；演示栈占用 18xxx，两者互不冲突。
+- `restart: unless-stopped` 对被**手动 `stop`** 过的容器不生效（Docker 语义）；本轮 22 个全部自启，说明此前无遗留 stop 状态。
