@@ -3,6 +3,8 @@
     { "path": "../backend" },
     { "path": "../admin" },
     { "path": "../app" },
+    { "path": "../showcase" },
+    { "path": "../overview" },
     { "path": "." }
   ],
   "settings": {
@@ -11,13 +13,18 @@
       "**/target": true,
       "**/node_modules": true,
       "**/dist": true,
-      "**/unpackage": true
+      "**/unpackage": true,
+      "**/tools/screenshots/.libs": true,
+      "**/tools/screenshots/.out": true
     },
     "search.exclude": {
       "**/target": true,
       "**/node_modules": true,
-      "**/dist": true
-    }
+      "**/dist": true,
+      "**/tools/screenshots/.libs": true,
+      "**/tools/screenshots/.out": true
+    },
+    "java.debug.settings.onBuildFailureProceed": true
   },
   "extensions": {
     "recommendations": [
